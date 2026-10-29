@@ -910,11 +910,12 @@ def parser():
     return a
 
 
-def options(argv=(), skip=(), **settings):
-    """Settings: the defaults, then config.json (less the keys in `skip`), then `argv`, then
-    `settings` (any flag's name, plus `theme` as a dict and `footer`, a function of the width
-    returning the bottom line)."""
+def options(argv=(), skip=(), defaults=None, **settings):
+    """Settings: the defaults (the caller's `defaults` over ours), then config.json (less the
+    keys in `skip`), then `argv`, then `settings` (any flag's name, plus `theme` as a dict and
+    `footer`, a function of the width returning the bottom line)."""
     a = parser()
+    a.set_defaults(**(defaults or {}))
     overrides = {}
     if os.path.isfile(CONFIG):
         try:
@@ -941,9 +942,9 @@ def options(argv=(), skip=(), **settings):
     return opts
 
 
-def pick(start='.', skip=(), **settings):
+def pick(start='.', skip=(), defaults=None, **settings):
     """Let someone choose a path on the canvas; the absolute path, or None if they cancelled."""
-    return run(options((), skip, start=start, **settings))
+    return run(options((), skip, defaults, start=start, **settings))
 
 
 def main(argv=None):
