@@ -84,3 +84,17 @@ zle -N _filecanvas; bindkey '^T' _filecanvas
 These snippets haven't been tried by hand yet.
 
 Started as a prototype for [cdeck](https://github.com/vmagierski/cdeck)'s folder trail.
+
+## As a library
+
+One file, no dependencies, so it can be copied into another project:
+
+```python
+import filecanvas
+path = filecanvas.pick('~/src/cd', dirs_only=True, theme='amber')   # absolute path, or None
+```
+
+A start that doesn't exist yet (`~/src/cd`) opens its folder filtered by the rest. Any flag can
+be passed by name; `theme` may also be a dict (`{"base": "nord", "sel_bg": 31}`), `footer` a
+function of the width that returns the bottom line, and `skip` names config.json keys to ignore
+(a host app keeping its own look passes `skip=('theme', 'colors')`).

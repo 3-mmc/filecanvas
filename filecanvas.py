@@ -328,6 +328,7 @@ class Node:
         self.filter = ""
         self.error = None
         self.row = self.depth = 0
+        self.dirs_only = parent.dirs_only if parent else False
 
     def load(self):
         if self.kids is None:
@@ -344,7 +345,8 @@ class Node:
 
     def shown(self):
         f = self.filter.casefold()
-        return [k for k in self.load() if f in k.name.casefold()] if f else self.load()
+        kids = [k for k in self.load() if k.is_dir] if self.dirs_only else self.load()
+        return [k for k in kids if f in k.name.casefold()] if f else kids
 
     def label(self):
         return self.name + ('/' if self.is_dir and self.name != '/' else '')
@@ -440,15 +442,22 @@ class Canvas:
         self.ls = ls_colors() if opts.ls_colors else {}
         self.git = Git(opts.git)
         self.root = Node('/', '/', True, kind='di')
+        self.root.dirs_only = opts.dirs_only
+        # A start that doesn't exist yet is a half-typed path: its folder, filtered by the rest.
+        start = os.path.abspath(os.path.expanduser(start or '.'))
+        typed = ''
+        if not os.path.exists(start):
+            start, typed = os.path.dirname(start), os.path.basename(start)
         node = self.root
-        for part in [p for p in os.path.abspath(start).split('/') if p]:
+        for part in [p for p in start.split('/') if p]:
             node.open = True
-            for i, k in enumerate(node.shown()):
+            for i, k in enumerate(node.load()):
                 if k.name == part:
-                    node.sel, node = i, k
+                    node.sel, node = node.shown().index(k) if k in node.shown() else 0, k
                     break
         if node.is_dir:
             node.open = True
+            node.filter = typed
             self.focus = node.shown()[0] if node.shown() else node
         else:
             self.focus = node
@@ -675,8 +684,11 @@ class Canvas:
                 s.append(ch)
             lines.append(''.join(s) + '\033[0m')
         lines.append(self.bar(w))
-        hint = '↑↓ move  →/tab open  ← parent  type filter  ⌃X fold  ⏎ choose  esc cancel'
-        lines.append(P.fg('hint') + hint[:w - 1] + '\033[0m')
+        if o.footer:
+            lines.append(o.footer(w))
+        else:
+            hint = '↑↓ move  →/tab open  ← parent  type filter  ⌃X fold  ⏎ choose  esc cancel'
+            lines.append(P.fg('hint') + hint[:w - 1] + '\033[0m')
         return lines, (ox, oy) != (round(tx), round(ty)) or bool(self.git.pending)
 
     def bar(self, w):
@@ -785,6 +797,7 @@ def apply(c, k, opts):
 
 
 def run(opts):
+    """Draw the canvas on the terminal until Enter (the chosen path, absolute) or Esc (None)."""
     c = Canvas(opts.start, opts)
     tty = open('/dev/tty', 'r+b', buffering=0)
     fd = tty.fileno()
@@ -828,10 +841,7 @@ def run(opts):
     finally:
         out('\033[?25h\033[?1049l')
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
-    if result and result[0] == 'done':
-        print(display(result[1]))
-        return 0
-    return 1
+    return result[1] if result and result[0] == 'done' else None
 
 
 def dump(opts):
@@ -850,7 +860,10 @@ def dump(opts):
 
 
 def theme(name, overrides):
-    if name in THEMES:
+    if isinstance(name, dict):
+        t = theme(name.get('base', 'powerline'), {})
+        t.update({k: v for k, v in name.items() if k != 'base'})
+    elif name in THEMES:
         t = dict(THEMES[name])
     elif os.path.isfile(os.path.expanduser(name)):
         with open(os.path.expanduser(name)) as f:
@@ -863,7 +876,7 @@ def theme(name, overrides):
     return t
 
 
-def main(argv=None):
+def parser():
     a = argparse.ArgumentParser(description='The file system as one canvas you move across.',
                                 epilog=f'Any of these can be set in {CONFIG}, e.g. '
                                        '{"theme": "nord", "dead": 0, "colors": {"sel_bg": 31}}.')
@@ -893,6 +906,15 @@ def main(argv=None):
     a.add_argument('--keys', help=argparse.SUPPRESS)
     a.add_argument('--size', default='120x36', help=argparse.SUPPRESS)
     a.add_argument('--raw', action='store_true', help=argparse.SUPPRESS)
+    a.add_argument('--dirs-only', action='store_true', help='folders only (for choosing one)')
+    return a
+
+
+def options(argv=(), skip=(), **settings):
+    """Settings: the defaults, then config.json (less the keys in `skip`), then `argv`, then
+    `settings` (any flag's name, plus `theme` as a dict and `footer`, a function of the width
+    returning the bottom line)."""
+    a = parser()
     overrides = {}
     if os.path.isfile(CONFIG):
         try:
@@ -900,22 +922,39 @@ def main(argv=None):
                 conf = json.load(f)
         except (OSError, ValueError) as e:
             sys.exit(f'filecanvas: {CONFIG}: {e}')
-        overrides = conf.pop('colors', {})
-        conf = {k.replace('-', '_'): v for k, v in conf.items()}
+        overrides = {} if 'colors' in skip else conf.pop('colors', {})
+        conf.pop('colors', None)
+        conf = {k.replace('-', '_'): v for k, v in conf.items() if k not in skip}
         known = {x.dest for x in a._actions}
         unknown = set(conf) - known
         if unknown:
             print(f"filecanvas: {CONFIG}: ignoring {', '.join(sorted(unknown))}", file=sys.stderr)
         a.set_defaults(**{k: v for k, v in conf.items() if k in known})
-    opts = a.parse_args(argv)
+    opts = a.parse_args(list(argv))
+    opts.footer = None
+    for k, v in settings.items():
+        setattr(opts, k, v)
     opts.colours = theme(opts.theme, overrides)
     if opts.ls_colors is None:
         opts.ls_colors = opts.colours.get('ls_colors', True)
     opts.truecolor = truecolor_terminal() if opts.color == 'auto' else opts.color == 'truecolor'
+    return opts
+
+
+def pick(start='.', skip=(), **settings):
+    """Let someone choose a path on the canvas; the absolute path, or None if they cancelled."""
+    return run(options((), skip, start=start, **settings))
+
+
+def main(argv=None):
+    opts = options(sys.argv[1:] if argv is None else argv)
     if opts.keys is not None:
         dump(opts)
-    else:
-        sys.exit(run(opts))
+        return
+    chosen = run(opts)
+    if chosen is None:
+        sys.exit(1)
+    print(display(chosen))
 
 
 if __name__ == '__main__':
