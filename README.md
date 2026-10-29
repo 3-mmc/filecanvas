@@ -5,7 +5,13 @@ A prototype file picker for the terminal: the file system as one canvas you move
 Every folder you open keeps its place on a tree that branches right, each folder's children
 centred on its row and spreading up and down only as far as they need. The camera eases after
 your selection and keeps it near the middle; everything you've opened stays on screen, dimmed by
-its distance from the path you're on (amber).
+its distance from the path you're on.
+
+It looks like your prompt: the chosen path is drawn along the bottom the way
+[powerline-shell](https://github.com/b-ryan/powerline-shell) draws one (`~` in its own chip, the
+git branch at the end, pink when the repo has changes), entries take their colours from
+`LS_COLORS` as `ls` does, and changed files are marked: `●` changed, `✚` staged, `?` untracked,
+`✖` conflicted, `•` on a folder with changes inside. Files git ignores are dimmed.
 
 ```
 python3 filecanvas.py [START]        # prints the chosen path; nothing on Esc
@@ -30,6 +36,11 @@ Python 3, no dependencies. Linux, macOS, WSL.
 
 | flag | default | |
 | --- | --- | --- |
+| `--theme NAME` | powerline | `powerline` (powerline-shell's default), `amber` (cdeck's), `nord`, `gruvbox`, `solarized-dark`, or a `.json` file |
+| `--glyphs` | powerline | `powerline` needs a powerline font, `round` a Nerd Font, `plain` nothing |
+| `--color` | auto | `truecolor` or `256`; auto uses 256 inside tmux unless `COLORTERM=truecolor` |
+| `--[no-]ls-colors` | theme | colour entries from `LS_COLORS`; `amber` turns it off by default, the rest on |
+| `--[no-]git` | on | mark changed entries and show the branch |
 | `--dead F` | 0.3 | camera dead zone as a fraction of the view; `0` keeps the selection centred |
 | `--across F` | 0.4 | where the selection sits across the view, 0..1 |
 | `--ease F` | 0.3 | camera easing per frame; `1` jumps (so does `CDECK_CALM=1`) |
@@ -37,9 +48,20 @@ Python 3, no dependencies. Linux, macOS, WSL.
 | `--colmax N` | 24 | widest a column gets |
 | `--gap N` | 5 | columns between a name and its children |
 | `--limit N` | 0 | most children per folder, the rest as "↓ N more"; `0` shows all, trailing off screen |
-| `--peek` | off | show the selected folder's contents before opening it |
-| `--fold` | off | close a branch when you move off it |
+| `--[no-]peek` | off | show the selected folder's contents before opening it |
+| `--[no-]fold` | off | close a branch when you move off it |
 | `--tab cycle` | branch | Tab moves down instead of opening |
+
+Any of these can live in `~/.config/filecanvas/config.json`, flags still winning, with your own
+colours on top of the theme's under `colors`:
+
+```json
+{"theme": "nord", "dead": 0, "glyphs": "round", "colors": {"sel_bg": "#ff8800"}}
+```
+
+A theme file is the same roles, starting from another theme: `{"base": "gruvbox", "path": 214}`.
+The roles are listed at the top of `filecanvas.py` (`THEMES`). Themes only choose colours and
+defaults; every setting works with every theme.
 
 ## In your shell
 
