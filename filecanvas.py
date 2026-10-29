@@ -26,7 +26,7 @@ Keys: ↑↓ siblings · → or Tab open · ← parent (the branch stays open) �
 column · Backspace unfilters · ⌃X fold everything off the current path · Enter choose · Esc.
 Settings are flags (--help), and any of them can live in ~/.config/filecanvas/config.json.
 """
-import argparse, json, os, select, stat, subprocess, sys, threading
+import argparse, json, os, select, stat, subprocess, sys, threading, unicodedata
 from concurrent.futures import ThreadPoolExecutor
 
 CONFIG = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'),
@@ -154,6 +154,28 @@ class Paint:
 
     def on(self, fg, bg, bold=False):
         return f"\033[{'1;' if bold else ''}{self.code(fg, 1, 38)};{self.code(bg, 1, 48)}m"
+
+
+def cells(text):
+    """How many columns `text` takes on a terminal: CJK and the like take two, accents none."""
+    return sum(0 if unicodedata.combining(c) else 2 if unicodedata.east_asian_width(c) in 'WF' else 1
+               for c in text)
+
+
+def clip(text, room):
+    """`text` cut to `room` columns, ending in … when it was cut."""
+    if cells(text) <= room:
+        return text
+    out, used = '', 0
+    for c in text:
+        if used + cells(c) > room - 1:
+            break
+        out, used = out + c, used + cells(c)
+    return out + '…'
+
+
+def printable(text):
+    return ''.join(c if c.isprintable() else '?' for c in text)
 
 
 def truecolor_terminal():
@@ -550,8 +572,7 @@ class Canvas:
         place(self.root, 0, 0, self.focus, o, nodes)
 
         def text_of(n):
-            t = n.label()
-            return t if len(t) <= o.colmax else t[:o.colmax - 1] + '…'
+            return clip(printable(n.label()), o.colmax)
 
         marks = {}
         for n in nodes:
@@ -559,7 +580,7 @@ class Canvas:
             marks[id(n)] = (rank, ignored, inside)
         widths = {}
         for n in nodes:
-            wd = len(text_of(n)) + (2 if marks[id(n)][0] else 0)
+            wd = cells(text_of(n)) + (2 if marks[id(n)][0] else 0)
             widths[n.depth] = max(widths.get(n.depth, 0), wd)
         extra = o.gap + (1 if cap_r else 0)
         xs = [0]
@@ -599,12 +620,31 @@ class Canvas:
         grid = [[(' ', '')] * w for _ in range(view_h)]
 
         def put(x, y, text, style):
+            # One cell per column: a wide character fills two, the second holding '' (drawn as
+            # nothing), so a row never runs past the screen's edge and wraps.
             y -= oy
-            if 0 <= y < view_h:
-                for i, ch in enumerate(text):
-                    xx = x - ox + i
-                    if 0 <= xx < w:
-                        grid[y][xx] = (ch, style)
+            if not 0 <= y < view_h:
+                return
+            row, xx = grid[y], x - ox
+            for ch in text:
+                wide = cells(ch)
+                if wide == 0:
+                    if 0 < xx <= w and row[xx - 1][0]:
+                        row[xx - 1] = (row[xx - 1][0] + ch, row[xx - 1][1])
+                    continue
+                for edge in range(xx, xx + wide):  # don't leave half of a wide character behind
+                    if 0 <= edge < w:
+                        if row[edge][0] == '' and edge > 0:
+                            row[edge - 1] = (' ', row[edge - 1][1])
+                        if edge + 1 < w and row[edge + 1][0] == '' and cells(row[edge][0][:1]) == 2:
+                            row[edge + 1] = (' ', row[edge + 1][1])
+                if 0 <= xx and xx + wide <= w:
+                    row[xx] = (ch, style)
+                    if wide == 2:
+                        row[xx + 1] = ('', style)
+                elif 0 <= xx < w:
+                    row[xx] = (' ', style)
+                xx += wide
 
         def dist(n):
             d = 0
@@ -633,7 +673,7 @@ class Canvas:
                 put(x, n.row, ' ' + text + ' ', P.on('sel_fg', 'sel_bg', True))
                 if cap_l:
                     put(x - 1, n.row, cap_l, P.fg('sel_bg'))
-                cur = x + len(text) + 2
+                cur = x + cells(text) + 2
                 if cap_r:
                     put(cur, n.row, cap_r, P.fg('sel_bg'))
                     cur += 1
@@ -646,7 +686,7 @@ class Canvas:
                     c, bold = self.colour(n)
                     style = P.fg(c, s, bold)
                 put(x, n.row, text, style)
-                cur = x + len(text)
+                cur = x + cells(text)
             if rank:
                 role, glyph, ascii_ = MARKS[rank]
                 glyph = '*' if inside and plain else '•' if inside else ascii_ if plain else glyph
@@ -720,8 +760,11 @@ class Canvas:
         if p and p.filter:
             tail.append(('filter: ' + p.filter + '▏', 'bg', 'filter', False))
 
+        segs = [(printable(t), *rest) for t, *rest in segs]
+        tail = [(printable(t), *rest) for t, *rest in tail]
+
         def width(ss):
-            return sum(len(t) + 3 for t, *_ in ss)
+            return sum(cells(t) + 3 for t, *_ in ss)
         # Too long: the first folders after ~ give way to one '…', the last one always stays.
         while width(segs + tail) > w - 1 and len(segs) > 2:
             if segs[1][0] != '…':
@@ -731,9 +774,12 @@ class Canvas:
             else:
                 break
         segs += tail
+        while width(segs) > w - 1 and len(segs) > 1:   # still too long: drop from the end
+            segs.pop()
+        if width(segs) > w - 1:
+            segs[0] = (clip(segs[0][0], max(1, w - 4)), *segs[0][1:])
         out = []
         for i, (text, fg, bg, bold) in enumerate(segs):
-            text = ''.join(c if c.isprintable() else '?' for c in text)
             out.append(P.on(fg, bg, bold) + ' ' + text + ' ')
             nxt = segs[i + 1] if i + 1 < len(segs) else None
             if nxt and nxt[2] == bg:
