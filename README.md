@@ -95,6 +95,7 @@ path = filecanvas.pick('~/src/cd', dirs_only=True, theme='amber')   # absolute p
 ```
 
 A start that doesn't exist yet (`~/src/cd`) opens its folder filtered by the rest. Any flag can
-be passed by name; `theme` may also be a dict (`{"base": "nord", "sel_bg": 31}`), `footer` a
-function of the width that returns the bottom line, `defaults` sets defaults that config.json can still change, and `skip` names config.json keys to ignore
+be passed by name; `theme` may also be a dict (`{"base": "nord", "sel_bg": 31}`), `header` / `footer`
+functions of the width returning a line for the top / bottom, `on_start=True` begins on the start
+folder itself (for choosing a folder), `defaults` sets defaults that config.json can still change, and `skip` names config.json keys to ignore
 (a host app keeping its own look passes `skip=('theme', 'colors')`).

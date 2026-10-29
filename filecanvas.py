@@ -458,7 +458,8 @@ class Canvas:
         if node.is_dir:
             node.open = True
             node.filter = typed
-            self.focus = node.shown()[0] if node.shown() else node
+            # on the start folder itself (choosing a folder), or on what's in it
+            self.focus = node if opts.on_start and not typed or not node.shown() else node.shown()[0]
         else:
             self.focus = node
         self.cam = None       # (x, y) world position of the top-left corner, floats
@@ -571,7 +572,7 @@ class Canvas:
             path.add(id(n)); n = n.parent
 
         # Camera: keep the focus inside a box round the middle (a fraction of the view).
-        view_h = h - 2
+        view_h = h - 2 - (1 if o.header else 0)
         fx, fy = xs[self.focus.depth], self.focus.row
         aim_x, aim_y = w * o.across, view_h / 2
         if self.cam is None:
@@ -675,7 +676,7 @@ class Canvas:
                 for k in kids:
                     put(spine + 1, k.row, '─', lit if chosen is k else line)
 
-        lines = []
+        lines = [o.header(w)] if o.header else []
         for row in grid:
             s, cur = [], None
             for ch, st in row:
@@ -907,13 +908,14 @@ def parser():
     a.add_argument('--size', default='120x36', help=argparse.SUPPRESS)
     a.add_argument('--raw', action='store_true', help=argparse.SUPPRESS)
     a.add_argument('--dirs-only', action='store_true', help='folders only (for choosing one)')
+    a.add_argument('--on-start', action='store_true', help='begin on the start folder itself, not inside it')
     return a
 
 
 def options(argv=(), skip=(), defaults=None, **settings):
     """Settings: the defaults (the caller's `defaults` over ours), then config.json (less the
-    keys in `skip`), then `argv`, then `settings` (any flag's name, plus `theme` as a dict and
-    `footer`, a function of the width returning the bottom line)."""
+    keys in `skip`), then `argv`, then `settings` (any flag's name, plus `theme` as a dict, and
+    `header` / `footer`: functions of the width returning a line for the top / the bottom)."""
     a = parser()
     a.set_defaults(**(defaults or {}))
     overrides = {}
@@ -932,7 +934,7 @@ def options(argv=(), skip=(), defaults=None, **settings):
             print(f"filecanvas: {CONFIG}: ignoring {', '.join(sorted(unknown))}", file=sys.stderr)
         a.set_defaults(**{k: v for k, v in conf.items() if k in known})
     opts = a.parse_args(list(argv))
-    opts.footer = None
+    opts.footer = opts.header = None
     for k, v in settings.items():
         setattr(opts, k, v)
     opts.colours = theme(opts.theme, overrides)
