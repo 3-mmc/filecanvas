@@ -51,6 +51,8 @@ Python 3, no dependencies. Linux, macOS, WSL.
 | `--[no-]peek` | off | show the selected folder's contents before opening it |
 | `--[no-]fold` | off | close a branch when you move off it |
 | `--tab cycle` | branch | Tab moves down instead of opening |
+| `--dirs-only` | off | list folders only (for choosing one) |
+| `--on-start` | off | begin on the start folder itself, not inside it |
 
 Any of these can live in `~/.config/filecanvas/config.json`, flags still winning, with your own
 colours on top of the theme's under `colors`:
