@@ -150,6 +150,11 @@ class Mail(fc.Provider):
         if watch:
             threading.Thread(target=self.watch, args=(watch,), daemon=True).start()
 
+    def loading(self):
+        """(what's loading, whether it's done), for the opening screen."""
+        n = len(self.accounts)
+        return f'{n} mail account{"s" if n != 1 else ""}', True
+
     def watch(self, every):
         """Invalidate everything when notmuch's index changes (new mail, changed tags)."""
         while True:

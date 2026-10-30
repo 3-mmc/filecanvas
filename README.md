@@ -43,8 +43,8 @@ Passwords are `pass` entries (`mail/<name>`); OAuth tokens are gpg-encrypted fil
 Chats come from [nchat](https://github.com/3-mmc/nchat) (the `feature/serve` branch until it's
 merged), which msgcanvas runs as `nchat --serve`: profiles (WhatsApp, Signal, Instagram, …) sit
 beside the mail accounts, each opening into its chats (pinned first, then the latest), and the
-pane shows a chat as a conversation, newest at the bottom, following new messages as they come.
-Nothing is marked read yet.
+pane shows a chat as a conversation, newest at the bottom, following new messages as they come,
+each person in their own colour and your own messages with ✓ (there) or ✓✓ (read).
 
 ```
 git clone -b feature/serve https://github.com/3-mmc/nchat && cd nchat && mkdir build && cd build
@@ -72,6 +72,21 @@ A mail draft has its headers on top (`To:`, `Cc:`, `Bcc:`, `Subject:`, and an `A
 per file) and the body under a blank line. When the editor closes: **y** send, **e** edit, **a**
 attach a file, **d** keep it for later (the account's *Unsent* folder), **q** throw it away. A sent
 mail is filed in the account's Sent folder at once.
+
+## What you see happen
+
+- **Sending** spins in the bar until it's gone (✓) or hasn't (✗).
+- **A message arriving** where you aren't makes its chat pulse, says who in the bar and shows a
+  desktop notification (Windows' under WSL), unless the chat is muted; new **mail** in an inbox
+  does the same for its account and folder, once for all that came together.
+- **Read receipts**: going into a chat (→ onto its messages, not passing it in the list) marks
+  what's there read and tells the sender. **Typing** in a chat's line tells them you're typing;
+  someone typing to you spins in the bar.
+- New lines in a conversation resolve out of noise; a draft thrown away goes to dust; the opening
+  screen assembles MSGCANVAS while your accounts load. `CDECK_CALM=1` holds all of it still.
+
+In accounts.toml, `[chat]` takes `read_receipts`, `typing` and `notify` (each `false` to stop it),
+and `[defaults]` takes `notify` (mail's) and `intro`.
 
 ## Pictures
 

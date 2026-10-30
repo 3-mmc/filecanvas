@@ -287,6 +287,24 @@ class Chat(fc.Provider):
     def root(self):
         return fc.Node('', 'chat', True, source=self, kind='root')
 
+    def loading(self):
+        """(what's loading, whether it's done), for the opening screen: each profile connecting,
+        then how many chats it has."""
+        s = self.serve
+        if s.error:
+            return s.error, True
+        if not s.ready.is_set():
+            return 'starting nchat…', False
+        parts, done = [], True
+        for p in s.profiles.values():
+            name = PROTOCOLS.get(p.protocol, p.protocol)
+            if p.chats:
+                parts.append(f'{name} · {len(p.chats)} chats')
+            else:
+                parts.append(f'{name} connecting…')
+                done = done and p.connected is False      # it said it can't: no use waiting
+        return '  ·  '.join(parts) or 'no chat accounts', done
+
     # -- the tree
     def children(self, node):
         s = self.serve

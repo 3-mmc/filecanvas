@@ -123,6 +123,16 @@ def browse(start):
                                    typing=c['typing'], notify=c['notify']))
     if not providers:
         sys.exit('msgcanvas: nothing to show yet: `msgcanvas setup` for mail, `msgcanvas chat-setup` for chats')
+    for p in providers:          # chats ask for their list at once, so it's there by the time it's shown
+        if hasattr(p, 'serve'):
+            p.serve.ready.wait(3)
+            for prof in p.serve.profiles.values():
+                prof.asked_chats = True
+                p.serve.request('get_chats', profile=prof.id)
+    if accounts.load()[0].get('intro', True) if os.path.exists(accounts.ACCOUNTS) else True:
+        from . import intro
+        loading = lambda: [p.loading() for p in providers]
+        intro.intro(lambda: '  ·  '.join(text for text, _ in loading()), lambda: all(done for _, done in loading()))
     try:
         fc.pick(start, provider=providers[0] if len(providers) == 1 else together.Together(providers), **LOOK)
     finally:
