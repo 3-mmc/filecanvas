@@ -42,9 +42,11 @@ Passwords are `pass` entries (`mail/<name>`); OAuth tokens are gpg-encrypted fil
 
 Chats come from [nchat](https://github.com/3-mmc/nchat) (the `feature/serve` branch until it's
 merged), which msgcanvas runs as `nchat --serve`: profiles (WhatsApp, Signal, Instagram, …) sit
-beside the mail accounts, each opening into its chats (pinned first, then the latest), and the
-pane shows a chat as a conversation, newest at the bottom, following new messages as they come,
-each person in their own colour and your own messages with ✓ (there) or ✓✓ (read).
+beside the mail accounts, each opening into its chats (pinned first, then the latest). A chat
+opens on the canvas itself into its latest 20 messages, oldest at the top: each person's messages
+in a row hang off their name (a chip in their own colour), each whole, ending in its time and, if
+it's yours, ✓ (there) or ✓✓ (read). You land on the newest and stay on it as more come; **↑
+earlier** (Enter) shows 20 more. A photo shows its picture in the pane beside.
 
 ```
 git clone -b feature/serve https://github.com/3-mmc/nchat && cd nchat && mkdir build && cd build
