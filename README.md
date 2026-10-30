@@ -67,6 +67,30 @@ A theme file is the same roles, starting from another theme: `{"base": "gruvbox"
 The roles are listed at the top of `filecanvas.py` (`THEMES`). Themes only choose colours and
 defaults; every setting works with every theme.
 
+## Other trees
+
+The canvas draws whatever a **provider** gives it; the file system is just the one it starts
+with. A provider says what a node's children are, and optionally its colour, a mark beside it,
+how bright it is, and the bar along the bottom; the canvas does the layout, the camera, the filter
+and the keys. A node's `path` is its id, and Enter returns it.
+
+```python
+import filecanvas as fc
+
+class Mail(fc.Provider):
+    def children(self, node):                      # the only one you need
+        return [fc.Node(f'{node.path}/{t.id}', t.subject, t.replies > 0, node, data=t)
+                for t in threads_under(node)]
+    def mark(self, node):                          # (theme role, glyph, glyph with no special font)
+        return ('git_dirty', '●', '*') if node.data and node.data.unread else None
+
+fc.pick(provider=Mail())
+```
+
+`fc.Tree({...})` turns nested dicts into a tree, for trying it out. The hooks are listed on
+`Provider` in `filecanvas.py` (`locate`, `label`, `colour`, `mark`, `dim`, `bar`, and `changed` /
+`busy` for work that lands in the background). `python3 -m unittest test_filecanvas` runs the tests.
+
 ## In your shell
 
 `cdi [FOLDER]` goes to a folder you choose on the canvas. It opens on the folder you're in (or

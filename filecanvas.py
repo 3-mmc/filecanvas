@@ -17,6 +17,9 @@ In your shell: `cdi` goes to a folder you choose, ⌃T puts a path in at the cur
 Keys: ↑↓ siblings · → or Tab open · ← parent (the branch stays open) · type to filter this
 column · Backspace unfilters · ⌃X fold everything off the current path · Enter choose · Esc.
 Settings are flags (--help), and any of them can live in ~/.config/filecanvas/config.json.
+
+The file system is one provider of the tree (FileSystem); anything else can be another
+(Provider, and Tree for nested dicts): `pick(provider=...)`.
 """
 import argparse, json, os, select, stat, subprocess, sys, threading, unicodedata
 from concurrent.futures import ThreadPoolExecutor
@@ -339,8 +342,12 @@ class Git:
 # -- the tree
 
 class Node:
-    def __init__(self, path, name, is_dir, parent=None, kind='fi'):
+    """One entry on the canvas. `path` is its id (unique in the tree, what Enter returns), `is_dir`
+    that it can be opened, `kind` and `data` its provider's own: what it is and what it holds."""
+    def __init__(self, path, name, is_dir, parent=None, kind='fi', source=None, data=None):
         self.path, self.name, self.is_dir, self.parent, self.kind = path, name, is_dir, parent, kind
+        self.source = source or (parent.source if parent else None)   # its Provider
+        self.data = data
         self.kids = None        # loaded lazily
         self.open = False
         self.sel = 0            # index into shown(): the remembered / selected child
@@ -351,15 +358,10 @@ class Node:
 
     def load(self):
         if self.kids is None:
-            self.kids = []
             try:
-                with os.scandir(self.path) as it:
-                    for e in it:
-                        is_dir, key = kind(e)
-                        self.kids.append(Node(e.path, e.name, is_dir, self, key))
+                self.kids = list(self.source.children(self))
             except OSError as e:
-                self.error = e.strerror or "unreadable"
-            self.kids.sort(key=lambda n: (not n.is_dir, n.name.startswith('.'), n.name.casefold()))
+                self.kids, self.error = [], e.strerror or "unreadable"
         return self.kids
 
     def shown(self):
@@ -368,7 +370,184 @@ class Node:
         return [k for k in kids if f in k.name.casefold()] if f else kids
 
     def label(self):
-        return self.name + ('/' if self.is_dir and self.name != '/' else '')
+        return self.source.label(self)
+
+
+# -- where the tree comes from
+
+class Provider:
+    """Where a canvas's tree comes from: the canvas lays it out, draws it and moves across it; a
+    provider says what's in it. Subclass it and hand one over (`pick(provider=...)`,
+    `options(provider=...)`); only children() is needed, the rest have plain defaults.
+
+    These run while drawing, so they should be quick. Slow work goes to a thread that sets
+    `changed` when it lands (the canvas redraws, and clears it), with busy() true until it has."""
+    changed = False
+
+    def root(self):
+        return Node('', '', True, source=self)
+
+    def children(self, node):
+        """`node`'s children, Nodes with `node` as their parent, in the order they're shown. Raise
+        OSError when they can't be had: its strerror is shown in their place."""
+        return []
+
+    def locate(self, start):
+        """Where to begin, from the caller's `start`: the ids (paths) of the nodes from below the
+        root down to it, and text to filter its children by (a half-typed name)."""
+        return [], ''
+
+    def label(self, node):
+        return node.name
+
+    def colour(self, node):
+        """(colour, bold) at full strength, a theme role or a colour; None for the theme's dir / file."""
+        return None
+
+    def mark(self, node):
+        """A mark beside the entry, (theme role, glyph, glyph without special fonts); or None."""
+        return None
+
+    def dim(self, node):
+        """How bright the entry is beside its neighbours: 1 the same, less fainter."""
+        return 1.0
+
+    def bar(self, node, plain):
+        """The bar along the bottom with `node` chosen: (segments, tail), each a list of (text,
+        fg, bg, bold) in theme roles. When there's no room, segments after the first give way."""
+        names = []
+        while node.parent:
+            names.append(self.label(node)); node = node.parent
+        segs = [(self.label(node) or '⌂', 'home_fg', 'home_bg', False)]
+        names.reverse()
+        for i, name in enumerate(names):
+            last = i == len(names) - 1
+            segs.append((name, 'cwd_fg' if last else 'seg_fg', 'seg_bg', last))
+        return segs, []
+
+    def busy(self):
+        return False
+
+    def wait(self):
+        while self.busy():
+            threading.Event().wait(0.02)
+
+
+class FileSystem(Provider):
+    """The file system: folders first, dotfiles after, LS_COLORS, git's marks and branch."""
+    def __init__(self, git=True, ls=False):
+        self.git = Git(git)
+        self.ls = ls_colors() if ls else {}
+
+    @property
+    def changed(self):
+        return self.git.changed
+
+    @changed.setter
+    def changed(self, value):
+        self.git.changed = value
+
+    def root(self):
+        return Node('/', '/', True, kind='di', source=self)
+
+    def children(self, node):
+        out = []
+        with os.scandir(node.path) as it:
+            for e in it:
+                is_dir, key = kind(e)
+                out.append(Node(e.path, e.name, is_dir, node, key))
+        out.sort(key=lambda n: (not n.is_dir, n.name.startswith('.'), n.name.casefold()))
+        return out
+
+    def locate(self, start):
+        # A start that doesn't exist yet is a half-typed path: its folder, filtered by the rest.
+        start = os.path.abspath(os.path.expanduser(start or '.'))
+        typed = ''
+        if not os.path.exists(start):
+            start, typed = os.path.dirname(start), os.path.basename(start)
+        parts = [p for p in start.split('/') if p]
+        return ['/' + '/'.join(parts[:i + 1]) for i in range(len(parts))], typed
+
+    def label(self, node):
+        return node.name + ('/' if node.is_dir and node.name != '/' else '')
+
+    def colour(self, n):
+        if not self.ls:
+            return None
+        hit = self.ls.get(n.kind)
+        if not hit and n.kind in ('fi', 'ex'):
+            dot = n.name.lower()
+            while '.' in dot and not hit:
+                dot = dot[dot.index('.') + 1:]
+                hit = self.ls.get('*.' + dot)
+            hit = hit or (self.ls.get('ex') if n.kind == 'ex' else None) or self.ls.get('fi')
+        if hit and hit[0] is not None:
+            c, bold = hit
+            # Bold basic colours show as their bright versions in most terminals; dim from those.
+            return (c + 8 if bold and isinstance(c, int) and c < 8 else c), bold
+        if hit:
+            return ('dir' if n.is_dir else 'file'), hit[1]
+        return None
+
+    def mark(self, node):
+        rank, _, inside = self.git.state(node)
+        if not rank:
+            return None
+        role, glyph, ascii_ = MARKS[rank]
+        return (role, '•', '*') if inside else (role, glyph, ascii_)
+
+    def dim(self, node):
+        s = 0.75 if node.name.startswith('.') else 1.0
+        return s * 0.65 if self.git.state(node)[1] else s   # ignored by git
+
+    def bar(self, node, plain):
+        path = node.path
+        home = os.path.expanduser('~')
+        segs = []
+        if path == home or path.startswith(home + '/'):
+            segs.append(('~', 'home_fg', 'home_bg', False))
+            rest = path[len(home):].strip('/')
+        else:
+            segs.append(('/', 'seg_fg', 'seg_bg', False))
+            rest = path.strip('/')
+        parts = rest.split('/') if rest else []
+        for i, part in enumerate(parts):
+            last = i == len(parts) - 1
+            segs.append((part, 'cwd_fg' if last else 'seg_fg', 'seg_bg', last))
+        tail = []
+        b = self.git.branch(path)
+        if b:
+            name, dirty = b
+            tail.append(((' ' if not plain else '') + name,
+                         'repo_dirty_fg' if dirty else 'repo_clean_fg',
+                         'repo_dirty_bg' if dirty else 'repo_clean_bg', False))
+        return segs, tail
+
+    def busy(self):
+        return bool(self.git.pending)
+
+    def wait(self):
+        self.git.wait()
+
+
+class Tree(Provider):
+    """Nested dicts as a tree, for trying the canvas on anything: a dict is a branch of
+    {name: subtree}, anything else a leaf holding it (node.data). Ids are /-joined names.
+
+        pick(provider=Tree({'fruit': {'apple': 1, 'pear': 2}, 'bread': None}), start='fruit')"""
+    def __init__(self, data, name='⌂'):
+        self.data, self.name = data, name
+
+    def root(self):
+        return Node('', self.name, True, source=self, data=self.data)
+
+    def children(self, node):
+        return [Node(f'{node.path}/{k}', str(k), isinstance(v, dict), node, data=v)
+                for k, v in node.data.items()]
+
+    def locate(self, start):
+        parts = [p for p in (start or '').split('/') if p and p != '.']
+        return ['/' + '/'.join(parts[:i + 1]) for i in range(len(parts))], ''
 
 
 def kind(entry):
@@ -458,20 +637,15 @@ class Canvas:
         self.theme = opts.colours
         self.paint = Paint(self.theme, opts.truecolor)
         self.glyphs = GLYPHS[opts.glyphs]
-        self.ls = ls_colors() if opts.ls_colors else {}
-        self.git = Git(opts.git)
-        self.root = Node('/', '/', True, kind='di')
+        self.source = opts.provider or FileSystem(opts.git, opts.ls_colors)
+        self.root = self.source.root()
         self.root.dirs_only = opts.dirs_only
-        # A start that doesn't exist yet is a half-typed path: its folder, filtered by the rest.
-        start = os.path.abspath(os.path.expanduser(start or '.'))
-        typed = ''
-        if not os.path.exists(start):
-            start, typed = os.path.dirname(start), os.path.basename(start)
+        ids, typed = self.source.locate(start)
         node = self.root
-        for part in [p for p in start.split('/') if p]:
+        for want in ids:
             node.open = True
-            for i, k in enumerate(node.load()):
-                if k.name == part:
+            for k in node.load():
+                if k.path == want:
                     node.sel, node = node.shown().index(k) if k in node.shown() else 0, k
                     break
         if node.is_dir:
@@ -544,21 +718,7 @@ class Canvas:
         """(colour, bold) for an entry at full strength."""
         if isinstance(n, Stub):
             return 'stub', False
-        if self.ls:
-            hit = self.ls.get(n.kind)
-            if not hit and n.kind in ('fi', 'ex'):
-                dot = n.name.lower()
-                while '.' in dot and not hit:
-                    dot = dot[dot.index('.') + 1:]
-                    hit = self.ls.get('*.' + dot)
-                hit = hit or (self.ls.get('ex') if n.kind == 'ex' else None) or self.ls.get('fi')
-            if hit and hit[0] is not None:
-                c, bold = hit
-                # Bold basic colours show as their bright versions in most terminals; dim from those.
-                return (c + 8 if bold and isinstance(c, int) and c < 8 else c), bold
-            if hit:
-                return ('dir' if n.is_dir else 'file'), hit[1]
-        return ('dir' if n.is_dir else 'file'), False
+        return self.source.colour(n) or (('dir' if n.is_dir else 'file'), False)
 
     # -- drawing
     def frame(self, w, h, animate=True):
@@ -572,10 +732,9 @@ class Canvas:
         def text_of(n):
             return clip(printable(n.label()), o.colmax)
 
-        marks = {}
+        marks = {}   # (the mark beside it, how bright it is) per entry
         for n in nodes:
-            rank, ignored, inside = self.git.state(n)
-            marks[id(n)] = (rank, ignored, inside)
+            marks[id(n)] = (None, 1.0) if isinstance(n, Stub) else (self.source.mark(n), self.source.dim(n))
         widths = {}
         for n in nodes:
             wd = cells(text_of(n)) + (2 if marks[id(n)][0] else 0)
@@ -657,16 +816,12 @@ class Canvas:
                 s = STRENGTH[min(abs(n.row - self.focus.row) // max(1, o.fade), len(STRENGTH) - 1)]
             else:
                 s = STRENGTH[min(2 + d * 2, len(STRENGTH) - 1)]
-            if n.name.startswith('.'):
-                s *= 0.75
-            if marks[id(n)][1]:        # ignored by git
-                s *= 0.65
-            return max(s, 0.3)
+            return max(s * marks[id(n)][1], 0.3)
 
         for n in nodes:
             x = xs[n.depth]
             text = text_of(n)
-            rank, ignored, inside = marks[id(n)]
+            mark = marks[id(n)][0]
             if n is self.focus:
                 put(x, n.row, ' ' + text + ' ', P.on('sel_fg', 'sel_bg', True))
                 if cap_l:
@@ -688,10 +843,9 @@ class Canvas:
                     style = P.fg(c, s, bold)
                 put(x, n.row, text, style)
                 cur = x + cells(text)
-            if rank:
-                role, glyph, ascii_ = MARKS[rank]
-                glyph = '*' if inside and plain else '•' if inside else ascii_ if plain else glyph
-                put(cur + 1, n.row, glyph, P.fg(role, s))
+            if mark:
+                role, glyph, ascii_ = mark
+                put(cur + 1, n.row, ascii_ if plain else glyph, P.fg(role, s))
                 cur += 2
             if is_open(n, self.focus, o.peek) and n._shown:
                 kids = n._shown
@@ -732,7 +886,7 @@ class Canvas:
         else:
             hint = '↑↓ move  →/tab open  ← parent  type filter  ⌃X fold  ⏎ choose  esc cancel'
             lines.append(P.fg('hint') + hint[:w - 1] + '\033[0m')
-        return lines, (ox, oy) != (round(tx), round(ty)) or bool(self.git.pending)
+        return lines, (ox, oy) != (round(tx), round(ty)) or self.source.busy()
 
     def backdrop_under(self, grid, top):
         """The screen behind (self.backdrop, {(row, col): char}), dimmed, in the grid's empty cells
@@ -754,29 +908,12 @@ class Canvas:
                     row[x + 1] = ('', ghost)
 
     def bar(self, w):
-        """The chosen path as powerline-shell draws a prompt: ~ in its own chip, then the rest."""
+        """The way to the choice as powerline-shell draws a prompt (the provider's segments), then
+        its tail and the filter."""
         P = self.paint
         hard, soft, _, _ = self.glyphs
-        path = self.focus.path
-        home = os.path.expanduser('~')
-        segs = []   # (text, fg, bg, bold)
-        if path == home or path.startswith(home + '/'):
-            segs.append(('~', 'home_fg', 'home_bg', False))
-            rest = path[len(home):].strip('/')
-        else:
-            segs.append(('/', 'seg_fg', 'seg_bg', False))
-            rest = path.strip('/')
-        parts = rest.split('/') if rest else []
-        for i, part in enumerate(parts):
-            last = i == len(parts) - 1
-            segs.append((part, 'cwd_fg' if last else 'seg_fg', 'seg_bg', last))
-        tail = []
-        b = self.git.branch(path)
-        if b:
-            name, dirty = b
-            tail.append(((' ' if self.opts.glyphs != 'plain' else '') + name,
-                         'repo_dirty_fg' if dirty else 'repo_clean_fg',
-                         'repo_dirty_bg' if dirty else 'repo_clean_bg', False))
+        segs, tail = self.source.bar(self.focus, self.opts.glyphs == 'plain')   # (text, fg, bg, bold)
+        segs, tail = list(segs), list(tail)
         p = self.focus.parent
         if p and p.filter:
             tail.append(('filter: ' + p.filter + '▏', 'bg', 'filter', False))
@@ -990,8 +1127,8 @@ def run(opts):
         while True:
             if os.get_terminal_size(fd) != size:
                 size, dirty = os.get_terminal_size(fd), True
-            if c.git.changed:
-                c.git.changed, dirty = False, True
+            if c.source.changed:
+                c.source.changed, dirty = False, True
             if dirty:
                 lines, moving = c.frame(*size, animate)
                 out('\033[?2026h\033[H' + '\r\n'.join(l + '\033[K' for l in lines) + '\033[?2026l')
@@ -1027,7 +1164,7 @@ def dump(opts):
             break
     w, h = map(int, opts.size.split('x'))
     c.frame(w, h, animate=False)
-    c.git.wait()
+    c.source.wait()
     lines, _ = c.frame(w, h, animate=False)
     for l in lines:
         print(l if opts.raw else re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', l).rstrip())
@@ -1100,8 +1237,9 @@ def parser():
 
 def options(argv=(), skip=(), defaults=None, **settings):
     """Settings: the defaults (the caller's `defaults` over ours), then config.json (less the
-    keys in `skip`), then `argv`, then `settings` (any flag's name, plus `theme` as a dict, and
-    `header` / `footer`: functions of the width returning a line for the top / the bottom)."""
+    keys in `skip`), then `argv`, then `settings` (any flag's name, plus `theme` as a dict,
+    `header` / `footer`: functions of the width returning a line for the top / the bottom, and
+    `provider`: a Provider, for a tree that isn't the file system)."""
     a = parser()
     a.set_defaults(**(defaults or {}))
     overrides = {}
@@ -1120,7 +1258,7 @@ def options(argv=(), skip=(), defaults=None, **settings):
             print(f"filecanvas: {CONFIG}: ignoring {', '.join(sorted(unknown))}", file=sys.stderr)
         a.set_defaults(**{k: v for k, v in conf.items() if k in known})
     opts = a.parse_args(list(argv))
-    opts.footer = opts.header = None
+    opts.footer = opts.header = opts.provider = None
     for k, v in settings.items():
         setattr(opts, k, v)
     opts.colours = theme(opts.theme, overrides)
@@ -1131,7 +1269,8 @@ def options(argv=(), skip=(), defaults=None, **settings):
 
 
 def pick(start='.', skip=(), defaults=None, **settings):
-    """Let someone choose a path on the canvas; the absolute path, or None if they cancelled."""
+    """Let someone choose a path on the canvas; the absolute path (the chosen node's id, with a
+    `provider`), or None if they cancelled."""
     return run(options((), skip, defaults, start=start, **settings))
 
 
