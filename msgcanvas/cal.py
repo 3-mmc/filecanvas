@@ -1,4 +1,4 @@
-# Vendored from calcanvas (github.com/3-mmc/calcanvas) at fb53d74: do not edit here.
+# Vendored from calcanvas (github.com/3-mmc/calcanvas) at 876ff79: do not edit here.
 # Change it there and run tools/vendor-calcanvas.py.
 """The calendar: months → days → what's on them. Where two things on a day collide, or where you
 wonder about a day ("what if…", ⌃W), the day forks into its alternatives: you weigh them side by
@@ -597,7 +597,7 @@ class Calendar(fc.Provider):
         """The event a day's label starts with, if it's timed: an event, or a fork's first."""
         if not items:
             return None
-        kind, what = items[0]
+        kind, what = lead(items)
         if kind == 'fork':
             k = self.kept(day, what)
             got = next((a for a in what if a[0] == k), None) if k else None
@@ -611,7 +611,7 @@ class Calendar(fc.Provider):
         head = f'{day.day:>2} {day:%a}'
         if not items:
             return head + ('  today' if day == self.today() else '')
-        kind, what = items[0]
+        kind, what = lead(items)
         first = self.fork_label(day, what) if kind == 'fork' else self.title(what)
         return f'{head}  {first}' + (f'  +{len(items) - 1}' if len(items) > 1 else '')
 
@@ -967,6 +967,11 @@ def clean(note):
 
 def short(text, room=28):
     return fc.clip(text, room)
+
+
+def lead(items):
+    """What a day's label starts with: a fork, being what's to decide, else the first thing."""
+    return next((i for i in items if i[0] == 'fork'), items[0])
 
 
 def alt_title(a):

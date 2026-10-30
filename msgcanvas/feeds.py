@@ -1,4 +1,4 @@
-# Vendored from calcanvas (github.com/3-mmc/calcanvas) at fb53d74: do not edit here.
+# Vendored from calcanvas (github.com/3-mmc/calcanvas) at 876ff79: do not edit here.
 # Change it there and run tools/vendor-calcanvas.py.
 """Calendars you subscribe to by their address: an .ics feed. Google Calendar gives one for each
 of yours (Settings → the calendar → Integrate calendar → "Secret address in iCal format") and for
