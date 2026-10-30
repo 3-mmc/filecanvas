@@ -94,6 +94,15 @@ class Events(unittest.TestCase):
         self.assertEqual(p.chat_name('1203630-16@g.us'), 'group')
         self.assertEqual(p.who('Stanley_0'), 'Stanley_0')
 
+    def test_people_keep_their_own_colour_in_a_chat(self):
+        s, p = self.serve()
+        order = ['ann', 'me', 'bo', 'ann', 'cy', 'bo']
+        self.assertEqual([p.colour('grp', who) for who in order], [0, 1, 1, 0, 2, 1])
+        self.assertEqual(p.colour('other', 'cy'), 0)                      # per chat
+        chip = chat.Chat.name_chip(None, 'Bo', ' 5 Oct', 7)
+        self.assertEqual(chip.segs, [('Bo', 'person_fg', 'person1', True)])
+        self.assertEqual(chat.Chat.name_chip(None, 'You', '', 0).segs[0][1:3], ('home_fg', 'home_bg'))
+
     def test_a_skipped_profile_is_kept(self):
         s, _ = self.serve()
         self.assertEqual(s.skipped, [{'profile': 'Signal_+492', 'why': 'locked'}])

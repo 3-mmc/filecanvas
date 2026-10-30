@@ -46,11 +46,20 @@ class Profile:
         self.unsent = {}            # chat: why the last message to it wasn't sent
         self.wanted = {}            # (chat, message): what to do with its file once it's downloaded
         self.fetching = set()       # (chat, message): pictures asked for, to show
+        self.colours = {}           # chat: {sender: n}, person n's colour, in the order they first wrote
 
     def who(self, user):
         if user == self.self_id or user == 'You':
             return 'You'
         return self.contacts.get(user, {}).get('name') or plain(user)
+
+    def colour(self, chat, sender):
+        """Which of the theme's colours for people `sender` has in `chat`: the next free one when
+        they first write, then theirs for as long as msgcanvas is open (none for you)."""
+        seen = self.colours.setdefault(chat, {})
+        if sender not in seen:
+            seen[sender] = len([s for s in seen if self.who(s) != 'You'])
+        return seen[sender]
 
     def chat_name(self, chat):
         c = self.chats.get(chat, {})
@@ -369,7 +378,7 @@ class Chat(fc.Provider):
                 who = p.who(m.get('sender'))
                 day = when(m['time'] / 1000) if m.get('time', -1) > 0 else ''
                 if (who, day) != last:          # a name, as a chip of the bar's, when it changes
-                    out += ([''] if out else []) + [self.name_chip(who, f' {day}')]
+                    out += ([''] if out else []) + [self.name_chip(who, f' {day}', p.colour(chat, m.get('sender')))]
                     last = (who, day)
                 out.append('\n'.join('  ' + l for l in self.body(p, m).split('\n')))
             typing = [p.who(u) for u in p.typing.get(chat, ())]
@@ -379,12 +388,14 @@ class Chat(fc.Provider):
         if node.kind == 'chat-message':
             p, chat, m = node.data
             t = time.strftime('%Y-%m-%d %H:%M', time.localtime(m['time'] / 1000)) if m.get('time', -1) > 0 else ''
-            return [self.name_chip(p.who(m.get('sender')), f' {t}'), '', self.body(p, m)] + self.picture(p, chat, m)
+            return [self.name_chip(p.who(m.get('sender')), f' {t}', p.colour(chat, m.get('sender'))),
+                    '', self.body(p, m)] + self.picture(p, chat, m)
         return None
 
-    def name_chip(self, who, after):
-        """Who wrote, coloured as the bar's chips are: you as its first, everyone else as the rest."""
-        colours = ('home_fg', 'home_bg') if who == 'You' else ('seg_fg', 'seg_bg')
+    def name_chip(self, who, after, n):
+        """Who wrote, as a chip like the bar's: you in its first chip's colours, everyone else in
+        their own (the theme's person0 … person5, `n`)."""
+        colours = ('home_fg', 'home_bg') if who == 'You' else ('person_fg', f'person{n % fc.PEOPLE}')
         return fc.Chips([(who, *colours, True)], after)
 
     def picture(self, p, chat, m):
