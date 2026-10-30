@@ -3,11 +3,11 @@
 for a header saying where it came from. Edit filecanvas itself and run this again; never edit the
 copy. msgcanvas's own choices live in its providers and __main__.py.
 
-    tools/vendor-filecanvas.py [path/to/filecanvas]     (default: ~/lab/filecanvas-providers, until feature/providers is merged)
+    tools/vendor-filecanvas.py [path/to/filecanvas]     (default: ~/lab/filecanvas)
 """
 import os, subprocess, sys
 
-source = os.path.expanduser(sys.argv[1] if len(sys.argv) > 1 else '~/lab/filecanvas-providers')
+source = os.path.expanduser(sys.argv[1] if len(sys.argv) > 1 else '~/lab/filecanvas')
 here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 target = os.path.join(here, 'msgcanvas', 'filecanvas.py')
 commit = subprocess.run(['git', '-C', source, 'rev-parse', '--short', 'HEAD'],
