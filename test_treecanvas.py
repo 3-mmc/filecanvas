@@ -602,6 +602,25 @@ class AltArrows(unittest.TestCase):
         self.assertEqual(c.source.moved, [('nest', 'a')])
         self.assertEqual(c.focus.name, 'a')                         # not taken as a plain arrow
 
+
+class Counts(unittest.TestCase):
+    def test_numbers_line_up_in_their_own_column(self):
+        class Folders(Live):
+            def count(self, node):
+                return {'Inbox': ('894', 'git_dirty', True), 'Trash': ('3', 'stub', False)}.get(node.name)
+
+            def pane_for(self, node):
+                return False
+        c = fc.Canvas('', options(provider=Folders({'Inbox': {'x': 1}, 'Sent': 1, 'Deleted Items': 1, 'Trash': 1})))
+        press(c, 'right', 'left')                                  # Inbox open, so it has a branch line
+        text = [ANSI.sub('', l).rstrip() for l in c.frame(100, 16, animate=False)[0]]
+        inbox = next(l for l in text if '894' in l)
+        trash = next(l for l in text if l.endswith(' 3'))
+        self.assertEqual(inbox.index('894') + 3, len(trash))       # right edges level: 894 over 3
+        deleted = next(l for l in text if 'Deleted Items' in l)
+        self.assertLess(deleted.index('Deleted Items') + len('Deleted Items'), inbox.index('894'))   # after every name
+        self.assertIn('894 ─', inbox)                              # the branch line starts after the number
+
 class Wrap(unittest.TestCase):
     def test_breaks_at_spaces_and_cuts_long_words(self):
         self.assertEqual(fc.wrap('the quick brown fox', 10), ['the quick', 'brown fox'])

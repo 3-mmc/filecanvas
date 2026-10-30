@@ -620,6 +620,11 @@ class Provider:
         """(fg, bg) to draw `node` as a chip, as the bar draws its path; None for plain text."""
         return None
 
+    def count(self, node):
+        """A number for `node` (unread mail, say), (text, colour, bold): the column of them is
+        right-aligned after the column's names, so they line up to be read down. None for none."""
+        return None
+
     def mark_before(self, node):
         """Whether `node`'s mark goes before its label (a task's ✓), not after (a file's git ●).
         A column with any mark before keeps room for one, so its labels line up."""
@@ -1181,11 +1186,16 @@ class Canvas:
             chips[id(n)] = None if stub else self.source.chip(n)
         before = {id(n) for n in nodes if marks[id(n)][0] and self.source.mark_before(n)}
         leads = {n.depth: 2 for n in nodes if id(n) in before}    # room for a mark before, the column over
-        widths = {}
+        counts = {id(n): self.source.count(n) for n in nodes if not isinstance(n, Stub)}
+        counts = {k: v for k, v in counts.items() if v and v[0]}
+        names, numbers = {}, {}      # per column: how wide its names are, and its numbers
         for n in nodes:
             wd = max(cells(l) for l in lines_of(n)) + (2 if marks[id(n)][0] and id(n) not in before else 0) + \
                 (2 if chips[id(n)] else 0) + leads.get(n.depth, 0)
-            widths[n.depth] = max(widths.get(n.depth, 0), wd)
+            names[n.depth] = max(names.get(n.depth, 0), wd)
+            if id(n) in counts:
+                numbers[n.depth] = max(numbers.get(n.depth, 0), cells(counts[id(n)][0]))
+        widths = {d: w + (numbers[d] + 2 if d in numbers else 0) for d, w in names.items()}
         extra = o.gap + (1 if cap_r else 0)
         xs = [0]
         for d in range(max(widths) + 1):
@@ -1305,6 +1315,11 @@ class Canvas:
                 role, glyph, ascii_ = mark
                 put(cur + 1, n.row, ascii_ if plain else glyph, P.fg(role, s))
                 cur += 2
+            if id(n) in counts:          # right-aligned in the column's own, after its names
+                text_n, role, bold = counts[id(n)]
+                right = xs[n.depth] + names[n.depth] + 2 + numbers[n.depth]
+                put(right - cells(text_n), n.row, text_n, P.fg(role, s, bold))
+                cur = right
             if is_open(n, self.focus, o.peek) and n._shown:
                 kids = n._shown
                 hot = id(n) in path and any(id(k) in path for k in kids)
