@@ -51,6 +51,9 @@ TEMPLATE = '''# msgcanvas's mail accounts. After editing: `msgcanvas setup` make
 # give imap_host and smtp_host). Anything a type sets can be set per account: auth (password,
 # microsoft, google), imap_host, imap_port, smtp_host, smtp_port, user (the login, if it isn't
 # the address), patterns (mbsync's folder patterns). `msgcanvas import-thunderbird` adds yours.
+#
+# Chats come from nchat (`msgcanvas chat-setup` adds a WhatsApp, Signal or Instagram account).
+# [chat] can say: nchat = "path/to/nchat", confdir = "nchat's folder", enabled = false.
 
 [defaults]
 real_name = "{real_name}"
@@ -132,6 +135,19 @@ def load(path=ACCOUNTS):
         if names.count(n) > 1:
             raise ValueError(f'{n}: two accounts have this name')
     return defaults, accounts
+
+
+def chat_settings(path=ACCOUNTS):
+    """accounts.toml's [chat]: `nchat` (the program), `confdir` (nchat's own folder, its default
+    if not given), `enabled` (true unless false)."""
+    try:
+        with open(path, 'rb') as f:
+            c = tomllib.load(f).get('chat', {})
+    except (OSError, tomllib.TOMLDecodeError):
+        c = {}
+    return dict(nchat=os.path.expanduser(c.get('nchat', 'nchat')),
+                confdir=os.path.expanduser(c['confdir']) if c.get('confdir') else None,
+                enabled=c.get('enabled', True))
 
 
 def quoted(text):

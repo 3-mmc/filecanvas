@@ -1,4 +1,4 @@
-# Vendored from filecanvas (github.com/3-mmc/filecanvas) at 332771b: do not edit here.
+# Vendored from filecanvas (github.com/3-mmc/filecanvas) at 8df5b34: do not edit here.
 # Change it there and run tools/vendor-filecanvas.py; msgcanvas's own choices are in its providers.
 """filecanvas: the file system as one canvas you move across.
 
@@ -460,6 +460,11 @@ class Provider:
         """What the reading pane shows for `node`: text (wrapped to fit), or None for nothing."""
         return None
 
+    def preview_end(self, node):
+        """Whether the pane opens on the end of `node`'s preview (a conversation's newest lines,
+        a log's latest), and keeps to the end as it grows while you're there."""
+        return False
+
     def invalidate(self, path=None):
         """From any thread: fetch the children of the node with id `path` (of every node, with
         None) again before the next frame. What's open and chosen stays where the ids still are."""
@@ -736,6 +741,7 @@ class Canvas:
         self.scroll = 0                     # the reading pane's first line
         self.page = 10                      # and how many it shows
         self._preview = (None, 0, None)     # (node, width, its lines) last shown there
+        self._at_end = False                # the pane showed its last line
 
     # -- what changed underneath
     def refresh(self):
@@ -1021,14 +1027,18 @@ class Canvas:
         """The reading pane, `height` rows `width` wide: a line down its left side, the choice's
         name, and its preview wrapped, from self.scroll down."""
         P, f = self.paint, self.focus
+        end = self.source.preview_end(f)
         if self._preview[0] is not f:
-            self.scroll = 0
+            self.scroll = sys.maxsize if end else 0
+        elif end and self._preview[1] == -1 and self._at_end:
+            self.scroll = sys.maxsize     # fetched again (refresh) with you at the end: stay there
         if self._preview[0] is not f or self._preview[1] != width:
             text = self.source.preview(f)
             self._preview = (f, width, None if text is None else wrap(text, width - 3))
         body = self._preview[2]
         room = width - 3
         self.page = max(1, height - 2)
+        self._at_end = body is not None and self.scroll >= len(body) - self.page
         rows = [P.fg('path', 1, True) + clip(printable(f.label()), room)]
         if body is not None:
             self.scroll = max(0, min(self.scroll, len(body) - self.page))

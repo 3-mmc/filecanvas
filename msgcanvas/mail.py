@@ -138,7 +138,9 @@ def any_of(msgs, key):
 
 
 class Mail(fc.Provider):
-    """Accounts (accounts.Account) → folders → threads → messages, each with its replies."""
+    """Accounts (accounts.Account) → folders → threads → messages, each with its replies.
+    `KINDS` are the node kinds it answers for."""
+    KINDS = ('account', 'folder', 'thread', 'message')
     pane = True
 
     def __init__(self, accounts, watch=2.0):

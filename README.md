@@ -1,6 +1,6 @@
 # msgcanvas
 
-Mail (and, next, chat) on one canvas you move across: accounts branch into folders, folders into
+Mail and chat on one canvas you move across: accounts branch into folders, folders into
 threads (newest first), threads into who replied to whom, and the message you're on is open in a
 reading pane beside them. Drawn by [filecanvas](https://github.com/3-mmc/filecanvas) through its
 providers, vendored here (`tools/vendor-filecanvas.py`).
@@ -38,6 +38,25 @@ server keeps everything. `0` keeps it all.
 Passwords are `pass` entries (`mail/<name>`); OAuth tokens are gpg-encrypted files under
 `~/.local/share/msgcanvas/tokens/`, kept fresh by neomutt's `mutt_oauth2.py`.
 
+## Chats
+
+Chats come from [nchat](https://github.com/3-mmc/nchat) (the `feature/serve` branch until it's
+merged), which msgcanvas runs as `nchat --serve`: profiles (WhatsApp, Signal, Instagram, …) sit
+beside the mail accounts, each opening into its chats (pinned first, then the latest), and the
+pane shows a chat as a conversation, newest at the bottom, following new messages as they come.
+Nothing is sent or marked read yet.
+
+```
+git clone -b feature/serve https://github.com/3-mmc/nchat && cd nchat && mkdir build && cd build
+cmake .. -DHAS_TELEGRAM=OFF -DHAS_SIGNAL=ON -DHAS_INSTAGRAM=ON && make -j    # WhatsApp is on by default
+ln -s "$PWD/bin/nchat" ~/.local/bin/nchat
+msgcanvas chat-setup     # each account: nchat's own setup, a QR code or a code; then quit nchat
+```
+
+A profile nchat is open on is locked: msgcanvas shows it greyed until nchat is closed. Its
+`[chat]` settings in accounts.toml can name another `nchat`, its `confdir`, or turn chats off
+(`enabled = false`).
+
 ## Keys
 
 The canvas's own: ↑↓ messages, → open a folder or thread, ← back, type to filter, PgUp/PgDn to
@@ -46,4 +65,5 @@ scroll the pane, Esc to leave.
 ## Tests
 
 `python3 -m unittest discover tests` builds a small maildir, indexes it with notmuch, and drives
-the canvas over it.
+the canvas over it; the chat tests run the real `nchat --serve` on a Dummy profile (skipped
+without nchat, `NCHAT=path` for another build).

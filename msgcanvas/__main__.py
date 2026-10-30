@@ -5,6 +5,7 @@
     msgcanvas import-thunderbird   add the accounts Thunderbird has (not its passwords)
     msgcanvas login NAME [--paste] store an account's password (pass), or sign in (OAuth)
     msgcanvas sync [NAME]          fetch new mail (mbsync), then index it (notmuch new)
+    msgcanvas chat-setup           add a chat account (WhatsApp, Signal, Instagram) with nchat
 """
 import os, shutil, subprocess, sys
 
@@ -101,12 +102,40 @@ def sync(name=None):
     sys.exit(status or indexed)
 
 
+def state(name):
+    d = os.path.join(os.environ.get('XDG_STATE_HOME') or os.path.expanduser('~/.local/state'), 'msgcanvas')
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, name)
+
+
 def browse(start):
-    from . import mail
-    found = configured()
-    if not found:
-        sys.exit(f'msgcanvas: no accounts in {accounts.ACCOUNTS}')
-    fc.pick(start, provider=mail.Mail(found), **LOOK)
+    """Mail and chats on one canvas; either may be missing."""
+    from . import chat, mail, together
+    providers = []
+    if os.path.exists(accounts.NOTMUCH):
+        found = configured()
+        if found:
+            providers.append(mail.Mail(found))
+    c = accounts.chat_settings()
+    if c['enabled'] and shutil.which(c['nchat']) and chat.has_profiles(c['confdir'] or chat.confdir()):
+        providers.append(chat.Chat(c['nchat'], c['confdir'], state('nchat-serve.log')))
+    if not providers:
+        sys.exit('msgcanvas: nothing to show yet: `msgcanvas setup` for mail, `msgcanvas chat-setup` for chats')
+    try:
+        fc.pick(start, provider=providers[0] if len(providers) == 1 else together.Together(providers), **LOOK)
+    finally:
+        for p in providers:
+            if hasattr(p, 'serve'):
+                p.serve.close()
+
+
+def chat_setup():
+    c = accounts.chat_settings()
+    if not shutil.which(c['nchat']):
+        sys.exit(f"msgcanvas: no {c['nchat']}: build nchat (github.com/3-mmc/nchat) or set [chat] nchat")
+    print('nchat asks which service, then shows a QR code or asks for a code. Scan or type it,\n'
+          'and when nchat opens on your chats, quit it (Ctrl-Q): msgcanvas uses it from then on.\n')
+    sys.exit(subprocess.call([c['nchat'], '--setup'] + (['-d', c['confdir']] if c['confdir'] else [])))
 
 
 def main(argv=None):
@@ -121,13 +150,15 @@ def main(argv=None):
         if made:
             print(f"msgcanvas: configs made for {', '.join(a.name for a in made)} in {accounts.CONFIG}\n"
                   'Next: `msgcanvas login NAME` for each, then `msgcanvas sync`.')
+    elif cmd == 'chat-setup' and len(argv) == 1:
+        chat_setup()
     elif cmd == 'import-thunderbird' and len(argv) == 1:
         import_thunderbird()
     elif cmd == 'login' and len(argv) in (2, 3) and argv[2:] in ([], ['--paste']):
         login(argv[1], paste=argv[2:] == ['--paste'])
     elif cmd == 'sync' and len(argv) <= 2:
         sync(argv[1] if len(argv) == 2 else None)
-    elif len(argv) <= 1 and cmd not in ('login', 'sync', 'import-thunderbird'):
+    elif len(argv) <= 1 and cmd not in ('login', 'sync', 'import-thunderbird', 'chat-setup'):
         browse(cmd)
     else:
         sys.exit(__doc__.strip())
