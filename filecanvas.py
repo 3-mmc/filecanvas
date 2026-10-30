@@ -178,6 +178,27 @@ def printable(text):
     return ''.join(c if c.isprintable() else '?' for c in text)
 
 
+def wrap(text, width):
+    """`text` as lines of at most `width` columns, broken at spaces where it can be."""
+    width = max(width, 2)
+    out = []
+    for para in text.replace('\r', '').expandtabs(4).split('\n'):
+        line = None
+        for word in printable(para).split(' '):
+            if line is not None and cells(line) + 1 + cells(word) <= width:
+                line += ' ' + word
+                continue
+            if line is not None:
+                out.append(line)
+            while cells(word) > width:          # longer than a line on its own: cut it
+                head = clip(word, width + 1)[:-1]
+                out.append(head)
+                word = word[len(head):]
+            line = word
+        out.append(line or '')
+    return out
+
+
 def truecolor_terminal():
     if os.environ.get('COLORTERM') in ('truecolor', '24bit'):
         return True
@@ -381,8 +402,13 @@ class Provider:
     `options(provider=...)`); only children() is needed, the rest have plain defaults.
 
     These run while drawing, so they should be quick. Slow work goes to a thread that sets
-    `changed` when it lands (the canvas redraws, and clears it), with busy() true until it has."""
+    `changed` when it lands (the canvas redraws, and clears it), with busy() true until it has;
+    when what's in the tree has changed, the thread calls invalidate() instead.
+
+    A provider can keep the canvas open: choose() returning None stays (Enter opens a branch),
+    and `pane` shows preview() beside the tree, a reading pane."""
     changed = False
+    pane = False      # the reading pane's default (--pane wins)
 
     def root(self):
         return Node('', '', True, source=self)
@@ -425,12 +451,35 @@ class Provider:
             segs.append((name, 'cwd_fg' if last else 'seg_fg', 'seg_bg', last))
         return segs, []
 
+    def choose(self, node):
+        """Enter: what the canvas ends with (pick() returns it), or None to stay on it."""
+        return node.path
+
+    def preview(self, node):
+        """What the reading pane shows for `node`: text (wrapped to fit), or None for nothing."""
+        return None
+
+    def invalidate(self, path=None):
+        """From any thread: fetch the children of the node with id `path` (of every node, with
+        None) again before the next frame. What's open and chosen stays where the ids still are."""
+        with STALE:
+            self.__dict__.setdefault('_stale', set()).add(path)
+        self.changed = True
+
+    def stale(self):
+        """The ids invalidate() was given since last asked."""
+        with STALE:
+            return self.__dict__.pop('_stale', set())
+
     def busy(self):
         return False
 
     def wait(self):
         while self.busy():
             threading.Event().wait(0.02)
+
+
+STALE = threading.Lock()
 
 
 class FileSystem(Provider):
@@ -523,6 +572,18 @@ class FileSystem(Provider):
                          'repo_dirty_bg' if dirty else 'repo_clean_bg', False))
         return segs, tail
 
+    def preview(self, node):
+        if node.is_dir:
+            return None
+        try:
+            with open(node.path, 'rb') as f:
+                head = f.read(32768)
+        except OSError as e:
+            return '(' + (e.strerror or 'unreadable') + ')'
+        if b'\0' in head:
+            return f'(binary, {os.path.getsize(node.path):,} bytes)'
+        return head.decode(errors='replace')
+
     def busy(self):
         return bool(self.git.pending)
 
@@ -534,7 +595,11 @@ class Tree(Provider):
     """Nested dicts as a tree, for trying the canvas on anything: a dict is a branch of
     {name: subtree}, anything else a leaf holding it (node.data). Ids are /-joined names.
 
-        pick(provider=Tree({'fruit': {'apple': 1, 'pear': 2}, 'bread': None}), start='fruit')"""
+        pick(provider=Tree({'fruit': {'apple': 1, 'pear': 2}, 'bread': None}), start='fruit')
+
+    The reading pane shows a leaf's value (a list's items one to a line)."""
+    pane = True
+
     def __init__(self, data, name='⌂'):
         self.data, self.name = data, name
 
@@ -542,12 +607,20 @@ class Tree(Provider):
         return Node('', self.name, True, source=self, data=self.data)
 
     def children(self, node):
+        d = self.data   # from the top, so a branch replaced since is seen (invalidate)
+        for part in node.path.split('/')[1:]:
+            d = d.get(part) if isinstance(d, dict) else None
         return [Node(f'{node.path}/{k}', str(k), isinstance(v, dict), node, data=v)
-                for k, v in node.data.items()]
+                for k, v in (d.items() if isinstance(d, dict) else ())]
 
     def locate(self, start):
         parts = [p for p in (start or '').split('/') if p and p != '.']
         return ['/' + '/'.join(parts[:i + 1]) for i in range(len(parts))], ''
+
+    def preview(self, node):
+        if node.is_dir or node.data is None:
+            return None
+        return '\n'.join(map(str, node.data)) if isinstance(node.data, list) else str(node.data)
 
 
 def kind(entry):
@@ -658,6 +731,55 @@ class Canvas:
         self.backdrop = opts.backdrop if isinstance(opts.backdrop, dict) else {}
         self.cam = None       # (x, y) world position of the top-left corner, floats
         self.target = None
+        self.pane = self.source.pane if opts.pane is None else opts.pane
+        self.scroll = 0                     # the reading pane's first line
+        self.page = 10                      # and how many it shows
+        self._preview = (None, 0, None)     # (node, width, its lines) last shown there
+
+    # -- what changed underneath
+    def refresh(self):
+        """Fetch again what the provider invalidated, keeping what's open and chosen by id."""
+        stale = self.source.stale()
+        if not stale:
+            return
+        todo = [self.root]
+        while todo:
+            n = todo.pop()
+            if n.kids is None:
+                continue
+            if None in stale or n.path in stale:
+                self.reload(n)
+            todo.extend(n.kids)
+        self._preview = (self._preview[0], -1, None)    # fetched again, scrolled where it was
+        self.reattach()
+
+    def reload(self, node):
+        old = {k.path: k for k in node.kids}
+        node.kids, node.error = None, None
+        kids = []
+        for k in node.load():
+            o = old.get(k.path)
+            if o:   # still there: the same node, with what it holds now
+                o.name, o.is_dir, o.kind, o.data = k.name, k.is_dir, k.kind, k.data
+                o.open = o.open and o.is_dir
+                k = o
+            kids.append(k)
+        node.kids = kids
+
+    def reattach(self):
+        """After a reload: the focus back on the tree, beside where it was if it's gone."""
+        chain, n = [], self.focus
+        while n.parent:
+            chain.append(n); n = n.parent
+        for k in reversed(chain):
+            if not any(k is x for x in n.kids or ()):
+                shown = n.shown()
+                self.focus = shown[min(n.sel, len(shown) - 1)] if shown else n
+                break
+            n = k
+        p = self.focus.parent
+        if p and self.focus in p.shown():
+            p.sel = p.shown().index(self.focus)
 
     # -- moving
     def siblings(self):
@@ -725,6 +847,10 @@ class Canvas:
         o, P, T = self.opts, self.paint, self.theme
         hard, soft, cap_l, cap_r = self.glyphs
         plain = o.glyphs == 'plain'
+        self.refresh()
+        full = w            # the tree gets what the reading pane leaves
+        pane_w = int(w * o.pane_width) if self.pane and w >= 60 else 0
+        w -= pane_w
         layout(self.root, o, self.focus)
         nodes = []
         place(self.root, 0, 0, self.focus, o, nodes)
@@ -872,21 +998,47 @@ class Canvas:
                     put(spine + 1, k.row, '─', lit if chosen is k else line)
 
         self.backdrop_under(grid, 1 if o.header else 0)
-        lines = [o.header(w)] if o.header else []
-        for row in grid:
+        lines = [o.header(full)] if o.header else []
+        side = self.pane_rows(pane_w, view_h) if pane_w else [''] * view_h
+        for row, beside in zip(grid, side):
             s, cur = [], None
             for ch, st in row:
                 if st != cur:
                     s.append('\033[0m' + st); cur = st
                 s.append(ch)
-            lines.append(''.join(s) + '\033[0m')
-        lines.append(self.bar(w))
+            lines.append(''.join(s) + '\033[0m' + beside)
+        lines.append(self.bar(full))
         if o.footer:
-            lines.append(o.footer(w))
+            lines.append(o.footer(full))
         else:
-            hint = '↑↓ move  →/tab open  ← parent  type filter  ⌃X fold  ⏎ choose  esc cancel'
-            lines.append(P.fg('hint') + hint[:w - 1] + '\033[0m')
+            hint = '↑↓ move  →/tab open  ← parent  type filter  ⌃X fold  ' + \
+                   ('pgup/pgdn scroll  ' if pane_w else '') + '⏎ choose  esc cancel'
+            lines.append(P.fg('hint') + hint[:full - 1] + '\033[0m')
         return lines, (ox, oy) != (round(tx), round(ty)) or self.source.busy()
+
+    def pane_rows(self, width, height):
+        """The reading pane, `height` rows `width` wide: a line down its left side, the choice's
+        name, and its preview wrapped, from self.scroll down."""
+        P, f = self.paint, self.focus
+        if self._preview[0] is not f:
+            self.scroll = 0
+        if self._preview[0] is not f or self._preview[1] != width:
+            text = self.source.preview(f)
+            self._preview = (f, width, None if text is None else wrap(text, width - 3))
+        body = self._preview[2]
+        room = width - 3
+        self.page = max(1, height - 2)
+        rows = [P.fg('path', 1, True) + clip(printable(f.label()), room)]
+        if body is not None:
+            self.scroll = max(0, min(self.scroll, len(body) - self.page))
+            rule = '─' * room
+            if len(body) > self.page:   # where in it you are
+                at = f' {self.scroll + 1}–{min(self.scroll + self.page, len(body))} of {len(body)} '
+                rule = clip('─' * max(0, room - cells(at) - 2) + at + '──', room)
+            rows.append(P.fg('line', STRENGTH[5]) + rule)
+            rows += [P.fg('file') + line for line in body[self.scroll:self.scroll + self.page]]
+        edge = P.fg('line', STRENGTH[4]) + '│ '
+        return ['\033[0m' + edge + (rows[i] if i < len(rows) else '') + '\033[0m' for i in range(height)]
 
     def backdrop_under(self, grid, top):
         """The screen behind (self.backdrop, {(row, col): char}), dimmed, in the grid's empty cells
@@ -1047,7 +1199,8 @@ def init(shell, cmd='cdi', key='ctrl-t', run=None):
 
 def keys(data):
     seq = {'\x1b[A': 'up', '\x1b[B': 'down', '\x1b[C': 'right', '\x1b[D': 'left',
-           '\x1bOA': 'up', '\x1bOB': 'down', '\x1bOC': 'right', '\x1bOD': 'left', '\x1b[Z': 'backtab'}
+           '\x1bOA': 'up', '\x1bOB': 'down', '\x1bOC': 'right', '\x1bOD': 'left', '\x1b[Z': 'backtab',
+           '\x1b[5~': 'pgup', '\x1b[6~': 'pgdn'}
     i = 0
     while i < len(data):
         for s, name in seq.items():
@@ -1059,12 +1212,19 @@ def keys(data):
 
 
 def apply(c, k, opts):
-    """One key; returns ('done', path) / ('cancel', None) / None."""
+    """One key; returns ('done', what the provider chose: the path) / ('cancel', None) / None."""
     p = c.focus.parent
     if k in ('esc', '\x03', '\x07'):
         return 'cancel', None
     if k in ('\r', '\n'):
-        return 'done', c.focus.path
+        chosen = c.source.choose(c.focus)
+        if chosen is not None:
+            return 'done', chosen
+        c.enter()       # staying on the canvas: a branch opens
+        return None
+    if k in ('pgup', 'pgdn'):
+        c.scroll = max(0, c.scroll + (c.page if k == 'pgdn' else -c.page))
+        return None
     if k == 'up' or (k == 'backtab' and opts.tab == 'cycle'):
         c.move(-1)
     elif k == 'down' or (k == '\t' and opts.tab == 'cycle'):
@@ -1232,6 +1392,11 @@ def parser():
                    help="only the branch you're on keeps its colours; the rest go grey (on)")
     a.add_argument('--backdrop', choices=('auto', 'off'), default='auto',
                    help='the screen behind, dimmed, in the empty space (inside tmux) (auto)')
+    a.add_argument('--pane', action=argparse.BooleanOptionalAction, default=None,
+                   help="a reading pane beside the tree: the chosen file's start (off; on for --tree)")
+    a.add_argument('--pane-width', type=float, default=0.45, help="the pane's share of the width (0.45)")
+    a.add_argument('--tree', metavar='FILE', help='show a JSON file as the tree, not the file system: '
+                   'objects are branches, everything else leaves shown in the pane')
     return a
 
 
@@ -1261,6 +1426,12 @@ def options(argv=(), skip=(), defaults=None, **settings):
     opts.footer = opts.header = opts.provider = None
     for k, v in settings.items():
         setattr(opts, k, v)
+    if opts.tree and not opts.provider:
+        try:
+            with open(os.path.expanduser(opts.tree)) as f:
+                opts.provider = Tree(json.load(f), os.path.basename(opts.tree))
+        except (OSError, ValueError) as e:
+            sys.exit(f'filecanvas: {opts.tree}: {e}')
     opts.colours = theme(opts.theme, overrides)
     if opts.ls_colors is None:
         opts.ls_colors = opts.colours.get('ls_colors', True)
@@ -1285,7 +1456,7 @@ def main(argv=None):
     chosen = run(opts)
     if chosen is None:
         sys.exit(1)
-    print(chosen if opts.print_as == 'absolute' else shell_word(chosen, opts.print_as == 'fish')
+    print(chosen if opts.provider or opts.print_as == 'absolute' else shell_word(chosen, opts.print_as == 'fish')
           if opts.print_as in ('shell', 'fish') else display(chosen))
 
 

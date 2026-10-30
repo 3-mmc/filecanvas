@@ -1,7 +1,7 @@
 """Providers: a tree that isn't the file system, on the same canvas.
 
     python3 -m unittest test_filecanvas"""
-import os, re, tempfile, unittest
+import os, re, tempfile, threading, unittest
 
 import filecanvas as fc
 
@@ -103,6 +103,86 @@ class TreeProvider(unittest.TestCase):
         self.assertTrue(c.frame(80, 20, animate=False)[1])
         p.pending = False
         self.assertFalse(c.frame(80, 20, animate=False)[1])
+
+
+class Live(fc.Tree):
+    """A tree that changes underneath, and keeps the canvas open."""
+    def choose(self, node):
+        return None if node.is_dir else node.path if node.name != 'stay' else None
+
+
+class StayingOpen(unittest.TestCase):
+    def canvas(self, data, start='', **settings):
+        return fc.Canvas(start, options(provider=Live(data), **settings))
+
+    def test_enter_stays_and_opens_a_branch(self):
+        c = self.canvas({'a': {'stay': 1, 'go': 2}})
+        self.assertIsNone(press(c, '\r'))
+        self.assertEqual(c.focus.path, '/a/stay')
+        self.assertIsNone(press(c, '\r'))
+        self.assertEqual(press(c, 'down', '\r'), ('done', '/a/go'))
+
+    def test_the_pane_shows_the_preview_and_scrolls(self):
+        c = self.canvas({'note': '\n'.join(f'line {i}' for i in range(40))})
+        text = screen(c, 100, 12)
+        self.assertTrue(text[0].endswith('│ note'))
+        self.assertIn('1–8 of 40', text[1])
+        self.assertTrue(text[2].endswith('line 0'))
+        press(c, 'pgdn')
+        self.assertTrue(screen(c, 100, 12)[2].endswith('line 8'))
+        press(c, 'pgdn', 'pgdn', 'pgdn', 'pgdn', 'pgdn')
+        self.assertTrue(screen(c, 100, 12)[2].endswith('line 32'))   # the last page, no further
+        self.assertNotIn('│', ''.join(screen(c, 50, 12)))            # too narrow: no pane
+        self.assertNotIn('│', ''.join(screen(self.canvas({'x': 1}, pane=False))))
+
+    def test_invalidate_keeps_what_is_open_and_chosen(self):
+        data = {'Inbox': {'t1': 'one', 't2': 'two'}, 'Sent': {}}
+        c = self.canvas(data, 'Inbox')
+        press(c, 'down')
+        self.assertEqual(c.focus.path, '/Inbox/t2')
+        data['Inbox'] = {'t0': 'new', 't1': 'one', 't2': 'two, edited'}
+        t = threading.Thread(target=c.source.invalidate, args=('/Inbox',))
+        t.start(); t.join()
+        self.assertTrue(c.source.changed)
+        text = '\n'.join(screen(c))
+        self.assertEqual(c.focus.path, '/Inbox/t2')
+        self.assertIn('t0', text)
+        self.assertIn('two, edited', text)
+        self.assertEqual(c.focus.parent.sel, 2)
+        press(c, 'up')
+        self.assertEqual(c.focus.path, '/Inbox/t1')
+
+    def test_a_reload_keeps_the_pane_where_it_was_scrolled(self):
+        data = {'note': '\n'.join(f'line {i}' for i in range(40))}
+        c = self.canvas(data)
+        screen(c, 100, 12)
+        press(c, 'pgdn')
+        data['note'] += '\nline 40'
+        c.source.invalidate()
+        text = screen(c, 100, 12)
+        self.assertTrue(text[2].endswith('line 8'))
+        self.assertIn('of 41', text[1])
+
+    def test_a_removed_focus_lands_beside_it(self):
+        data = {'Inbox': {'t1': 1, 't2': 2, 't3': 3}}
+        c = self.canvas(data, 'Inbox')
+        press(c, 'down')
+        del data['Inbox']['t2']
+        c.source.invalidate()           # everything
+        screen(c)
+        self.assertEqual(c.focus.path, '/Inbox/t3')
+        data.clear()
+        c.source.invalidate()
+        screen(c)
+        self.assertIs(c.focus, c.root)
+
+
+class Wrap(unittest.TestCase):
+    def test_breaks_at_spaces_and_cuts_long_words(self):
+        self.assertEqual(fc.wrap('the quick brown fox', 10), ['the quick', 'brown fox'])
+        self.assertEqual(fc.wrap('abcdefghijkl', 5), ['abcde', 'fghij', 'kl'])
+        self.assertEqual(fc.wrap('a\r\n\nb\tc', 10), ['a', '', 'b   c'])
+        self.assertTrue(all(fc.cells(l) <= 5 for l in fc.wrap('漢字漢字漢字 ok', 5)))
 
 
 class FileSystemProvider(unittest.TestCase):

@@ -29,6 +29,7 @@ Python 3, no dependencies. Linux, macOS, WSL.
 | ← | go to the parent (the branch stays open) |
 | type | filter the current column; Backspace removes a letter, ⌃U clears |
 | ⌃X | fold every branch off the current path |
+| PgUp PgDn | scroll the reading pane (`--pane`) |
 | Enter | choose |
 | Esc | cancel |
 
@@ -55,6 +56,9 @@ Python 3, no dependencies. Linux, macOS, WSL.
 | `--tab cycle` | branch | Tab moves down instead of opening |
 | `--dirs-only` | off | list folders only (for choosing one) |
 | `--on-start` | off | begin on the start folder itself, not inside it |
+| `--[no-]pane` | off | a reading pane beside the tree: the start of the chosen file |
+| `--pane-width F` | 0.45 | the pane's share of the width |
+| `--tree FILE` | | show a JSON file as the tree instead (objects are branches, the rest leaves shown in the pane) |
 
 Any of these can live in `~/.config/filecanvas/config.json`, flags still winning, with your own
 colours on top of the theme's under `colors`:
@@ -87,9 +91,21 @@ class Mail(fc.Provider):
 fc.pick(provider=Mail())
 ```
 
-`fc.Tree({...})` turns nested dicts into a tree, for trying it out. The hooks are listed on
-`Provider` in `filecanvas.py` (`locate`, `label`, `colour`, `mark`, `dim`, `bar`, and `changed` /
-`busy` for work that lands in the background). `python3 -m unittest test_filecanvas` runs the tests.
+`fc.Tree({...})` turns nested dicts into a tree (`--tree FILE.json` from the command line), for
+trying it out. The hooks are listed on `Provider` in `filecanvas.py`: `locate`, `label`, `colour`,
+`mark`, `dim`, `bar`, and `changed` / `busy` for work that lands in the background.
+
+A provider can also keep the canvas open, the way a mail or chat client would:
+
+- `choose(node)` is what Enter does: a value ends the canvas (`pick` returns it), `None` stays
+  (and on a branch, opens it). By default it ends with the node's id.
+- `preview(node)` fills a **reading pane** beside the tree (`pane = True`, or `--pane`); it's
+  wrapped to fit, and PgUp / PgDn scroll it.
+- `invalidate(path)`, safe from any thread, fetches a node's children again before the next frame
+  (every node's, with no path). What's open and chosen stays where the ids still are; a chosen
+  node that's gone gives way to its neighbour.
+
+`python3 -m unittest test_filecanvas` runs the tests.
 
 ## In your shell
 
