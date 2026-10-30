@@ -1,20 +1,27 @@
+# Vendored from calcanvas (github.com/3-mmc/calcanvas) at fb53d74: do not edit here.
+# Change it there and run tools/vendor-calcanvas.py.
 """The calendar: months → days → what's on them. Where two things on a day collide, or where you
 wonder about a day ("what if…", ⌃W), the day forks into its alternatives: you weigh them side by
 side, each with what would follow it (⌃N then…), and keep one (⌃K); the rest fade, kept to come
 back to.
 
 Calendars are folders of .ics files (vdirsyncer's layout, or Google Calendar's export unzipped),
-a folder or a file a calendar, under ~/.local/share/msgcanvas/calendars/. What-ifs are kept here
-only (state: whatif.json): nothing is written to a calendar.
+a folder or a file a calendar, under ~/.local/share/calcanvas/calendars/; feeds.py fetches the
+ones you subscribe to there. What-ifs are kept here only (~/.local/state/calcanvas/whatif.json):
+nothing is written to a calendar.
 
-Repeating events: FREQ with INTERVAL, COUNT, UNTIL, EXDATE and moved occurrences; BYDAY and the
-other BY… parts aren't read yet (an event repeats on its first day's weekday, date)."""
+Repeating events: FREQ with INTERVAL, COUNT, UNTIL, BYDAY (MO, 2TU, -1FR), BYMONTHDAY, BYMONTH,
+EXDATE and moved occurrences, laid out in the event's own time zone (9:00 in London stays 9:00
+there across the clocks changing)."""
 import colorsys, datetime as dt, json, os, re, threading, time, uuid, zlib
 from zoneinfo import ZoneInfo
 
-from . import accounts, treecanvas as fc
+from . import treecanvas as fc
 
-CALENDARS = os.path.join(accounts.DATA, 'calendars')
+DATA = os.path.join(os.environ.get('XDG_DATA_HOME') or os.path.expanduser('~/.local/share'), 'calcanvas')
+STATE = os.path.join(os.environ.get('XDG_STATE_HOME') or os.path.expanduser('~/.local/state'), 'calcanvas')
+CALENDARS = os.path.join(DATA, 'calendars')
+WHATIF = os.path.join(STATE, 'whatif.json')
 NOTE_WIDTH = 60
 NOTE_MAX = 700          # characters of a description shown; a long invitation's start
 ROOT = '@cal'
@@ -49,16 +56,22 @@ def unescape(v):
 
 
 def when(value, params, zone):
-    """A DTSTART-like value: a date (all day), or a datetime in `zone`."""
+    """A DTSTART-like value: a date (all day), or a datetime in its own zone (`zone` if it has
+    none: floating, or one only Windows knows, as Outlook's)."""
     if params.get('VALUE') == 'DATE' or re.fullmatch(r'\d{8}', value):
         return dt.date(int(value[:4]), int(value[4:6]), int(value[6:8]))
     t = dt.datetime.strptime(value[:15], '%Y%m%dT%H%M%S')
     if value.endswith('Z'):
-        return t.replace(tzinfo=dt.timezone.utc).astimezone(zone)
+        return t.replace(tzinfo=dt.timezone.utc)
     try:
-        return t.replace(tzinfo=ZoneInfo(params['TZID'].strip('"'))).astimezone(zone)
-    except Exception:           # no TZID, or one only Windows knows (Outlook's): taken as here
+        return t.replace(tzinfo=ZoneInfo(params['TZID'].strip('"')))
+    except Exception:
         return t.replace(tzinfo=zone)
+
+
+def here(t, zone):
+    """`t` on the clock here (a date stays a date)."""
+    return t if all_day(t) else t.astimezone(zone)
 
 
 def all_day(t):
@@ -85,7 +98,7 @@ class Event:
     def last(self):
         if all_day(self.start):
             return max(self.first, self.end - DAY)
-        if self.end - self.start < DAY:        # a night out ends tomorrow, but it's tonight's
+        if self.end - self.start <= DAY:       # a night out (even a whole one) is the night it starts
             return self.first
         return (self.end - dt.timedelta(microseconds=1)).date()
 
@@ -119,40 +132,68 @@ def components(text):
     return out
 
 
-def shifted(t, freq, k):
-    """`t` moved on k steps of `freq`; None where that day doesn't exist (31 April)."""
-    try:
-        if freq == 'DAILY':
-            return t + k * DAY
-        if freq == 'WEEKLY':
-            return t + k * 7 * DAY
-        if freq == 'MONTHLY':
-            y, m = divmod(t.month - 1 + k, 12)
-            return t.replace(year=t.year + y, month=m + 1)
-        if freq == 'YEARLY':
-            return t.replace(year=t.year + k)
-    except ValueError:
-        return None
-    return None
+WEEKDAYS = ('MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU')
+
+
+def on_day(t, d):
+    """`t` moved to the day `d`, at the same time on the clock of its zone."""
+    return d if all_day(t) else t.replace(year=d.year, month=d.month, day=d.day)
+
+
+def in_month(y, m, byday, bymonthday, default):
+    """The days of month m in year y a rule picks: BYDAY ((n, weekday): the nth, from the end if
+    negative, 0 every one), else BYMONTHDAY (negative from the end), else the `default` day."""
+    first = dt.date(y, m, 1)
+    days = (add_months(first, 1) - first).days
+    if byday:
+        out = []
+        for n, wd in byday:
+            hits = [first + DAY * i for i in range(days) if (first + DAY * i).weekday() == wd]
+            out += hits if n == 0 else [hits[n - 1 if n > 0 else n]] if -len(hits) <= n <= len(hits) else []
+        return out
+    picks = bymonthday or [default]
+    return [first + DAY * ((x if x > 0 else days + x + 1) - 1) for x in picks if 1 <= (x if x > 0 else days + x + 1) <= days]
 
 
 def repeats(start, rule, zone, horizon):
-    r = dict(p.split('=', 1) for p in rule.split(';') if '=' in p)
+    """The times an RRULE puts `start` on, in order, up to the day `horizon`."""
+    r = dict(p.split('=', 1) for p in rule.upper().split(';') if '=' in p)
     freq, step = r.get('FREQ'), max(1, int(r.get('INTERVAL', 1)))
     if freq not in ('DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY'):    # hourly and the like: just the first
         yield start
         return
     count = int(r['COUNT']) if 'COUNT' in r else None
-    until = day_of(when(r['UNTIL'], {}, zone)) if 'UNTIL' in r else None
+    until = day_of(here(when(r['UNTIL'], {}, zone), zone)) if 'UNTIL' in r else None
+    byday = [(int(m[1] or 0), WEEKDAYS.index(m[2])) for m in re.finditer(r'([+-]?\d+)?(MO|TU|WE|TH|FR|SA|SU)', r.get('BYDAY', ''))]
+    bymonthday = [int(x) for x in r['BYMONTHDAY'].split(',')] if r.get('BYMONTHDAY') else []
+    bymonth = [int(x) for x in r['BYMONTH'].split(',')] if r.get('BYMONTH') else []
+    first = day_of(start)
     n = 0
-    for i in range(5000):
-        t = shifted(start, freq, i * step)
-        if t is None:           # 31 April, 29 February: skipped, as calendars do
-            continue
-        if (until and day_of(t) > until) or day_of(t) > horizon or (count is not None and n >= count):
-            break
-        n += 1
-        yield t
+    for k in range(0, 100000, step):
+        if freq == 'DAILY':
+            begins = first + DAY * k
+            days = [begins] if (not byday or begins.weekday() in {w for _, w in byday}) and \
+                (not bymonth or begins.month in bymonth) else []
+        elif freq == 'WEEKLY':
+            begins = first - DAY * first.weekday() + DAY * 7 * k        # its week's Monday
+            days = [begins + DAY * w for w in sorted({w for _, w in byday})] if byday else [first + DAY * 7 * k]
+        elif freq == 'MONTHLY':
+            begins = add_months(first.replace(day=1), k)
+            days = in_month(begins.year, begins.month, byday, bymonthday, first.day) \
+                if not bymonth or begins.month in bymonth else []
+        else:
+            begins = dt.date(first.year + k, 1, 1)
+            days = [d for mo in (bymonth or [first.month])
+                    for d in in_month(begins.year, mo, byday if bymonth else [], bymonthday, first.day)]
+        if begins > horizon or (until and begins > until):
+            return
+        for d in sorted(days):
+            if d < first:
+                continue
+            if (until and d > until) or d > horizon or (count is not None and n >= count):
+                return
+            n += 1
+            yield on_day(start, d)
 
 
 def parse(text, calendar, zone, horizon):
@@ -172,6 +213,8 @@ def parse(text, calendar, zone, horizon):
         if 'DTEND' in c:
             p, v = c['DTEND'][0]
             end = when(v, p, zone)
+            if all_day(start) != all_day(end):      # a mixed pair: the end as the start is
+                end = None
         elif 'DURATION' in c:
             end = start + duration(get('DURATION'))
         else:
@@ -183,13 +226,19 @@ def parse(text, calendar, zone, horizon):
                                             for v in vs.split(',')}
             for t in repeats(start, c['RRULE'][0][1], zone, horizon):
                 if day_of(t) not in skip:
-                    out.append(Event(f'{uid}@{day_of(t)}', title, t, end and t + (end - start), where, note, calendar))
+                    out.append(Event(f'{uid}@{day_of(t)}', title, here(t, zone), end and here(t + (end - start), zone),
+                                     where, note, calendar))
+            for p, vs in c.get('RDATE', []):      # and the days it's added on
+                for v in vs.split(','):
+                    t = when(v, p, zone)
+                    out.append(Event(f'{uid}@{day_of(t)}', title, here(t, zone), end and here(t + (end - start), zone),
+                                     where, note, calendar))
         else:
             rid = ''
             if 'RECURRENCE-ID' in c:
                 p, v = c['RECURRENCE-ID'][0]
                 rid = f'@{day_of(when(v, p, zone))}'
-            out.append(Event(uid + rid, title, start, end, where, note, calendar))
+            out.append(Event(uid + rid, title, here(start, zone), end and here(end, zone), where, note, calendar))
     return out
 
 
@@ -276,7 +325,8 @@ class Calendar(fc.Provider):
     answers for."""
     KINDS = ('calendar', 'month', 'day', 'span', 'event', 'fork', 'alt', 'step', 'detail')
 
-    def __init__(self, folder=CALENDARS, plans=None, today=None, watch=2.0, zone=None, now=None):
+    def __init__(self, folder=CALENDARS, plans=None, today=None, watch=2.0, zone=None, now=None, feeds=(),
+                 fetch=None):
         self.folder, self.zone = folder, zone or local_zone()
         self.fixed_now = now or (dt.datetime.combine(today, dt.time(12), self.zone) if today else None)
         self.plans = Plans(plans)
@@ -285,6 +335,25 @@ class Calendar(fc.Provider):
         self.load()
         if watch:
             threading.Thread(target=self.watch, args=(watch,), daemon=True).start()
+        if feeds and fetch:
+            threading.Thread(target=self.keep_fetching, args=(feeds, fetch), daemon=True).start()
+
+    def keep_fetching(self, feeds, fetch):
+        """Fetch each feed now, then every so often (its `every`), a chip in the bar while it does;
+        what changes, watch() sees and shows."""
+        due = {f.key: 0.0 for f in feeds}
+        while True:
+            for f in feeds:
+                if time.time() < due[f.key]:
+                    continue
+                key = 'feed:' + f.key
+                self.status(key, f.name, 'busy')
+                try:
+                    self.status(key, f.name, 'gone' if fetch(f) == 'same' else 'ok')
+                except OSError as e:
+                    self.status(key, f'{f.name}: {e}', 'failed')
+                due[f.key] = time.time() + f.every * 60
+            time.sleep(10)
 
     def now(self):
         return self.fixed_now or dt.datetime.now(self.zone)
@@ -821,7 +890,7 @@ class Calendar(fc.Provider):
             self.plans.save()
             self.touch(node, day)
             self.pulse(f'{ROOT}/{day:%Y-%m}/{day}')
-            canvas.say(f'{day:%a %-d %b} forks: weigh it, then ⌃K keep one')
+            canvas.say(f'{dated(day)} forks: weigh it, then ⌃K keep one')
 
         if node.kind == 'month':
             m = d['month']
@@ -841,7 +910,7 @@ class Calendar(fc.Provider):
         day = d['day'] if 'day' in d and d['day'] else (d['event'].first if 'event' in d else None)
         if day is None:
             return
-        prompt = f'what if, instead of {short(instead.title)}' if instead else f'what if, on {day:%a %-d %b}'
+        prompt = f'what if, instead of {short(instead.title)}' if instead else f'what if, on {dated(day)}'
         canvas.ask(prompt, lambda text: add(day, text.strip()) if text.strip() else None)
 
 
@@ -856,10 +925,15 @@ def month_name(m, today):
     return f'{m:%B}' if m.year == today.year else f'{m:%B %Y}'
 
 
+def dated(d):
+    """'24 Sat Oct': the number first, as every day on the canvas."""
+    return f'{d.day} {d:%a %b}'
+
+
 def span_dates(e):
     a, b = e.first, e.last
     return f'{a.day:>2} {a:%a} → {b.day} {b:%a}' if (a.year, a.month) == (b.year, b.month) else \
-        f'{a.day:>2} {a:%b} → {b.day} {b:%b}'
+        f'{a.day:>2} {a:%a %b} → {b.day} {b:%a %b}'
 
 
 def shade(day):
@@ -875,13 +949,13 @@ def when_text(e):
     a = e.start
     if all_day(a):
         if e.span:
-            return f'{e.first:%a %-d %b} → {e.last:%a %-d %b}, {(e.last - e.first).days + 1} days'
-        return f'{a:%a %-d %b %Y}, all day'
+            return f'{dated(e.first)} → {dated(e.last)}, {(e.last - e.first).days + 1} days'
+        return f'{dated(a)} {a:%Y}, all day'
     b = e.end
-    out = f'{a:%a %-d %b}  {a:%H:%M}'
+    out = f'{dated(a)}  {a:%H:%M}'
     if b > a:
-        out += f' → {b:%H:%M}' if b.date() == a.date() else f' → {b:%a %H:%M}' if (b - a) < 7 * DAY else \
-            f' → {b:%a %-d %b %H:%M}'
+        out += f' → {b:%H:%M}' if b.date() == a.date() else f' → {b.day} {b:%a}  {b:%H:%M}' if (b - a) < 7 * DAY else \
+            f' → {dated(b)}  {b:%H:%M}'
     return out
 
 

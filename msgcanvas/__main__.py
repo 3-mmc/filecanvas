@@ -117,13 +117,19 @@ def state(name):
 
 
 def calendar():
-    from . import cal
-    return cal.Calendar(plans=state('whatif.json'))
+    """calcanvas's calendar (vendored): the same calendars, feeds and what-ifs as `calcanvas`."""
+    from . import cal, feeds
+    return cal.Calendar(plans=cal.WHATIF, feeds=feeds.load(), fetch=feeds.fetch)
+
+
+def has_calendar():
+    from . import cal, feeds
+    return cal.has_calendars() or bool(feeds.load())
 
 
 def browse(start):
     """Mail, chats and the calendar on one canvas; any may be missing."""
-    from . import cal, chat, mail, together
+    from . import chat, mail, together
     providers = []
     if os.path.exists(accounts.NOTMUCH):
         found = configured()
@@ -134,11 +140,11 @@ def browse(start):
     if c['enabled'] and shutil.which(c['nchat']) and chat.has_profiles(c['confdir'] or chat.confdir()):
         providers.append(chat.Chat(c['nchat'], c['confdir'], state('nchat-serve.log'), read_receipts=c['read_receipts'],
                                    typing=c['typing'], notify=c['notify']))
-    if cal.has_calendars():
+    if has_calendar():
         providers.append(calendar())
     if not providers:
         sys.exit('msgcanvas: nothing to show yet: `msgcanvas setup` for mail, `msgcanvas chat-setup` for chats, '
-                 f'.ics files in {cal.CALENDARS} for a calendar')
+                 f'`calcanvas add` for a calendar')
     for p in providers:          # chats ask for their list at once, so it's there by the time it's shown
         if hasattr(p, 'serve'):
             p.serve.ready.wait(3)
@@ -179,9 +185,8 @@ def main(argv=None):
             print(f"msgcanvas: configs made for {', '.join(a.name for a in made)} in {accounts.CONFIG}\n"
                   'Next: `msgcanvas login NAME` for each, then `msgcanvas sync`.')
     elif cmd == 'cal' and len(argv) <= 2:
-        from . import cal
-        if not cal.has_calendars():
-            sys.exit(f'msgcanvas: no calendars yet: put .ics files (or folders of them) in {cal.CALENDARS}')
+        if not has_calendar():
+            sys.exit('msgcanvas: no calendars yet: `calcanvas add NAME` (github.com/3-mmc/calcanvas)')
         fc.pick(argv[1] if len(argv) == 2 else '', provider=calendar(), **LOOK)
     elif cmd == 'chat-setup' and len(argv) == 1:
         chat_setup()

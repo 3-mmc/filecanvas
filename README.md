@@ -49,29 +49,12 @@ Passwords are `pass` entries (`mail/<name>`); OAuth tokens are gpg-encrypted fil
 
 ## Calendar
 
-Your calendar beside mail and chats (or alone: `msgcanvas cal [YYYY-MM]`), opening on this month
-at today. Months branch into what's on them, each day as `30 Fri  …`: its number and weekday in
-its month's colour (October orange, December teal…), each week a shade of it. A day with one
-thing is that thing (its time in a column of their own), a day with more opens into them. Each
-thing opens onto when, where, and what it says. Within two days, a thing's time moves to the front
-and the column says how long until it (`in 3h`, `tomorrow`, `now`).
-
-What runs over days (a trip, a visit) is a bar in its own colour among the days it starts on, and
-an era: it opens onto what happens within it, eras inside it too, and while you're in one it says
-how far (`day 7 of 8`).
-
-**What-ifs.** Where two things on a day overlap, the day forks (⑂) into them, and the bar counts
-what's still to decide. **⌃W** asks "what if…" anywhere: on a day it weighs your idea against
-the day as it is; on something on the calendar, against that; on a month, say the day first
-(`12 dinner with D`). Each alternative can grow what would follow it (**⌃N** then…). **⌃K** keeps
-one: it's ticked and its branch lit, the rest fade (to dust in the bar) but stay, to change your
-mind (⌃K again). **⌃E** renames a what-if, **⌃D** throws it away. What-ifs are kept in
-`~/.local/state/msgcanvas/whatif.json`: nothing is written to your calendar.
-
-Calendars are `.ics` files in `~/.local/share/msgcanvas/calendars/`: a folder of them per
-calendar (vdirsyncer's layout; a `displayname` file names it) or one file per calendar (Google
-Calendar's Settings → Export, unzipped). It's read again whenever they change. Repeats are laid
-out (FREQ, INTERVAL, COUNT, UNTIL, EXDATE, moved occurrences; not yet BYDAY and the like).
+Your calendar beside mail and chats (or alone: `msgcanvas cal [YYYY-MM]`): it's
+[calcanvas](https://github.com/3-mmc/calcanvas)'s, vendored (`tools/vendor-calcanvas.py`), with
+the same calendars, feeds (`calcanvas add`) and what-ifs. Months open on today, days as
+`30 Fri  …` in their month's colour (a shade per week); multi-day things are eras holding what
+happens in them; clashes fork a day, and **⌃W** what if… forks one yourself, **⌃K** keeps one.
+See calcanvas's README for all of it.
 
 ## Chats
 
