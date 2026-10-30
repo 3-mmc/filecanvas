@@ -235,6 +235,13 @@ def ls_colors():
 
 # -- pictures in the pane
 
+class Chips:
+    """A line of chips for the reading pane, drawn as the bar draws its path: `segs` are (text,
+    fg, bg, bold) in theme roles, and `after` is plain text that follows them (a date, say)."""
+    def __init__(self, segs, after=''):
+        self.segs, self.after = segs, after
+
+
 class Picture:
     """A picture for the reading pane: preview() returns one, or a list of text and pictures.
     chafa draws it as coloured blocks, as wide as the pane and at most `rows` high, so it scrolls
@@ -1116,6 +1123,11 @@ class Canvas:
         for part in preview if isinstance(preview, list) else [preview]:
             if isinstance(part, Picture):
                 out += part.lines(room, max(4, min(height - 1, part.rows)), self.opts.truecolor)
+            elif isinstance(part, Chips):
+                width = sum(cells(t) + 3 for t, *_ in part.segs)    # a chip: ' text ' and its separator
+                segs = [(clip(printable(t), max(1, room - 4)), *rest) for t, *rest in part.segs]
+                after = clip(printable(part.after), max(0, room - width))
+                out.append(self.chips(segs) + self.paint.fg('hint') + after)
             elif part is not None:
                 out += [self.paint.fg('file') + line for line in wrap(str(part), room)]
         return out
@@ -1209,6 +1221,13 @@ class Canvas:
             segs.pop()
         if width(segs) > w - 1:
             segs[0] = (clip(segs[0][0], max(1, w - 4)), *segs[0][1:])
+        return self.chips(segs)
+
+    def chips(self, segs):
+        """(text, fg, bg, bold) segments drawn as the bar draws them: chips, joined by the
+        glyphs' separators."""
+        P = self.paint
+        hard, soft, _, _ = self.glyphs
         out = []
         for i, (text, fg, bg, bold) in enumerate(segs):
             out.append(P.on(fg, bg, bold) + ' ' + text + ' ')

@@ -281,6 +281,21 @@ class Pictures(unittest.TestCase):
             fc.shutil.which = real
         self.assertTrue(text[2].endswith('a photo:') and text[3].endswith('🖼 cat.jpg') and text[4].endswith('after'))
 
+
+class ChipLines(unittest.TestCase):
+    def test_a_line_of_chips_in_the_pane_as_the_bar_draws_them(self):
+        class Talk(fc.Tree):
+            def preview(self, node):
+                return [fc.Chips([('Ann', 'home_fg', 'home_bg', True)], ' · 5 Oct'), 'hello',
+                        fc.Chips([('A very long name indeed, longer than the pane', 'seg_fg', 'seg_bg', False)])]
+        c = fc.Canvas('', options(provider=Talk({'x': 1}), glyphs='plain'))
+        lines, _ = c.frame(100, 12, animate=False)
+        plain = [ANSI.sub('', l).rstrip() for l in lines]
+        self.assertTrue(plain[2].endswith('│  Ann  · 5 Oct'))
+        self.assertIn(c.paint.on('home_fg', 'home_bg', True) + ' Ann ', lines[2])
+        self.assertTrue(plain[3].endswith('hello'))
+        self.assertLessEqual(fc.cells(plain[4]), 100)
+
 class Wrap(unittest.TestCase):
     def test_breaks_at_spaces_and_cuts_long_words(self):
         self.assertEqual(fc.wrap('the quick brown fox', 10), ['the quick', 'brown fox'])
