@@ -20,7 +20,7 @@ MORE_LINES = 80
 ORDER = (('INBOX',), ('Sent', 'Gesendet', 'Odeslan'), ('Drafts', 'Entwürfe', 'Koncept'),
          ('Archive', 'Archiv'), ('Starred', 'Markiert', 'S hvězdičkou'),
          ('Junk', 'Spam', 'Nevyžádan'), ('Trash', 'Deleted', 'Gelöscht', 'Papierkorb', 'Koš'))
-SEP = '\x1f'     # in ids: between a folder and a thread, and a thread and a message
+from .common import SEP
 
 
 def database():

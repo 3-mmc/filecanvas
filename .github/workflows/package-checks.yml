@@ -1,0 +1,51 @@
+name: Package checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  wheel:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ['3.11', '3.13']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install build pytest
+      - run: python -m build
+      - run: python -m pip install dist/*.whl
+      - run: python -m pytest -q
+      - name: Check installed wheel outside the checkout
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP"
+          twigs --version
+          twigs doctor tasks
+          twigs doctor --json
+          python -c "from twigs.apps.msg import chat; from twigs.apps.tasks.model.store import Store; s = Store(':memory:'); s.seed_demo(); s.close()"
+  arch:
+    runs-on: ubuntu-latest
+    container: archlinux:base
+    steps:
+      - run: pacman -Syu --noconfirm git python python-pip python-pytest tzdata
+      - uses: actions/checkout@v4
+      - run: |
+          python -m venv /tmp/package-venv
+          /tmp/package-venv/bin/python -m pip install '.[test]'
+          /tmp/package-venv/bin/python -m pytest -q
+          cd /tmp
+          /tmp/package-venv/bin/twigs doctor --platform arch
+  mail:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y notmuch python3-notmuch2 python3-venv
+      - run: |
+          /usr/bin/python3 -m venv --system-site-packages /tmp/mail-venv
+          /tmp/mail-venv/bin/python -m pip install '.[test]'
+          /tmp/mail-venv/bin/python -m pytest -q

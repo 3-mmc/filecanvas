@@ -6,7 +6,7 @@ NOTMUCH_CONFIG), so nothing in ~/.mbsyncrc, ~/.msmtprc or ~/.notmuch-config is t
 
 Secrets never live here: a password is `pass show mail/<name>`, an OAuth token is a
 gpg-encrypted file that neomutt's mutt_oauth2.py keeps fresh."""
-import os, re, shlex, sys, tomllib
+import os, re, shlex, shutil, ssl, sys, tomllib
 
 CONFIG = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'), 'msgcanvas')
 DATA = os.path.join(os.environ.get('XDG_DATA_HOME') or os.path.expanduser('~/.local/share'), 'msgcanvas')
@@ -14,8 +14,20 @@ ACCOUNTS = os.path.join(CONFIG, 'accounts.toml')
 MBSYNCRC = os.path.join(CONFIG, 'mbsyncrc')
 MSMTPRC = os.path.join(CONFIG, 'msmtprc')
 NOTMUCH = os.path.join(CONFIG, 'notmuch-config')
-OAUTH2 = '/usr/share/neomutt/oauth2/mutt_oauth2.py'
-CERTS = '/etc/ssl/certs/ca-certificates.crt'
+def oauth_helper():
+    override = os.environ.get('TWIGS_OAUTH_HELPER')
+    if override:
+        return override
+    candidates = [shutil.which('mutt_oauth2.py'),
+                  '/usr/share/neomutt/oauth2/mutt_oauth2.py',
+                  '/usr/share/doc/neomutt/examples/oauth2/mutt_oauth2.py',
+                  '/opt/homebrew/share/neomutt/oauth2/mutt_oauth2.py',
+                  '/usr/local/share/neomutt/oauth2/mutt_oauth2.py']
+    return next((p for p in candidates if p and os.path.isfile(p)), candidates[1])
+
+
+OAUTH2 = oauth_helper()
+CERTS = os.environ.get('SSL_CERT_FILE') or ssl.get_default_verify_paths().cafile or '/etc/ssl/cert.pem'
 MARK = '# Made by msgcanvas from accounts.toml: edit that and run `msgcanvas setup`, not this.'
 
 # Thunderbird's public client id: most university Microsoft 365 tenants already allow it.

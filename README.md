@@ -6,19 +6,24 @@ arrows, typing to filter. Each app is a **twig**. Use one, some, or all of them 
 
 ```
 git clone https://github.com/3-mmc/twigs && cd twigs
-./twigs-launcher install            # or: install msg cal   (just those); puts `twigs` on your PATH
-twigs apps                          # which twigs there are, and what each still needs
-twigs                               # Emails, Messages, Calendar, TuiDo: each a branch, as they're set up
+uv tool install .                  # installs the Python package and console commands
+twigs doctor                       # optional dependencies and platform-specific installation help
+twigs apps                         # which twigs there are, and what each still needs
+twigs                              # a new task desk; mail, chats and calendars as they're set up
 ```
 
-Python 3.11 or newer and nothing else for the canvas itself; each twig says what it needs.
+Python 3.11 or newer. Files, calendars and tasks use only the standard library; mail and chats
+have independent optional backends. The distribution name is **twigs-cli** (not the unrelated
+PyPI package `twigs`). See [installation and packaging](docs/install.md), including how to make
+the system Notmuch binding available in a virtual environment. The package is not yet on PyPI.
+Source checkouts can still use `./twigs-launcher install` for the symlink workflow.
 
 | twig | what | needs | also called |
 | --- | --- | --- | --- |
 | `files` | folders and files; `cdi` in your shell goes where you choose, ⌃T puts a path at the cursor | — | |
-| `msg` | mail (folders, threads, who replied to whom, ⌃Z snooze, send later) and chats (WhatsApp, Signal, Instagram) | isync, notmuch, msmtp, pass, python3-notmuch2; [nchat](https://github.com/3-mmc/nchat) for chats | `msgcanvas` |
+| `msg` | mail (folders, threads, who replied to whom, ⌃Z snooze, send later) and chats (WhatsApp, Signal, Instagram) | mail: isync, notmuch, msmtp, pass, Notmuch Python bindings; chats: [nchat](https://github.com/3-mmc/nchat) for chats | `msgcanvas` |
 | `cal` | calendars from .ics feeds and files, reminders, eras, and what-ifs that fork a day | — | `calcanvas` |
-| `tasks` | [tuido](https://github.com/3-mmc/TuiDo)'s desk: paths, library, habits, projects; due days, timers | tuido | `tuido --canvas` |
+| `tasks` | [tuido](https://github.com/3-mmc/TuiDo)'s desk: paths, library, habits, projects; due days, timers | bundled model; no separate TuiDo installation | `tuido --canvas` |
 
 In TuiDo’s Today list (and earlier pages), **Alt+↑ / Alt+↓** moves the selected entry.
 The order is saved; **Ctrl+Z** undoes a move.
@@ -77,5 +82,5 @@ for its file canvas.
 
 ```
 python3 -m unittest                                              # from here: a private home, never yours
-PYTHONPATH=$PWD path/to/tuido/.venv/bin/python -m pytest tests/test_tasks.py   # tasks, with tuido
+uv run --extra test pytest                                      # tasks included; mail checks skip if unavailable
 ```

@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "twigs-cli"
+dynamic = ["version"]
+description = "Files, mail, chats, calendars and tasks as small trees on one terminal canvas"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+classifiers = [
+  "Environment :: Console",
+  "Programming Language :: Python :: 3",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+]
+
+[project.urls]
+Homepage = "https://github.com/3-mmc/twigs"
+Issues = "https://github.com/3-mmc/twigs/issues"
+
+[project.scripts]
+twigs = "twigs.__main__:main"
+msgcanvas = "twigs.__main__:main"
+calcanvas = "twigs.__main__:main"
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.hatch.version]
+path = "twigs/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["twigs"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/twigs", "/tests", "/docs", "/README.md", "/pyproject.toml", "/twigs-launcher"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

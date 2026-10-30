@@ -24,10 +24,7 @@ import os
 import threading
 import time
 
-try:
-    from tuido.learning_ui import LEVELS
-except ImportError:     # tuido's interface (textual) isn't here: its words for a skill's level
-    LEVELS = ('Not yet', 'Explored', 'Practised', 'Demonstrated')
+LEVELS = ('Not yet', 'Explored', 'Practised', 'Demonstrated')
 
 from twigs import core as tc
 from twigs.kit import notify, when

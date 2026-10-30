@@ -6,7 +6,13 @@ import atexit, contextlib, io, json, os, re, shutil, subprocess, tempfile, textw
 
 from tests import TMP                            # the private home every test runs in
 from twigs import core as fc
-from twigs.apps.msg import accounts, mail
+from twigs.apps.msg import accounts
+try:
+    from twigs.apps.msg import mail
+except (ImportError, OSError):
+    raise unittest.SkipTest('mail integration: install Notmuch and its Python binding')
+if not shutil.which('notmuch'):
+    raise unittest.SkipTest('mail integration: install the notmuch command')
 
 ANSI = re.compile(r'\x1b\[[0-9;?]*[a-zA-Z]')
 MAILDIR = os.path.join(TMP, 'Mail')

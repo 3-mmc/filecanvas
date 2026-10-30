@@ -8,6 +8,7 @@
     msgcanvas sync [NAME]          fetch new mail (mbsync), then index it (notmuch new)
     msgcanvas send-due             send the drafts whose time has come (⌃Z send later), for cron
     msgcanvas chat-setup           add a chat account (WhatsApp, Signal, Instagram) with nchat
+    msgcanvas chat-setup instagram --help    where to find Instagram login cookies
 """
 import os, shutil, subprocess, sys
 
@@ -41,6 +42,8 @@ def login(name, paste=False):
     a = found[name]
     if a.auth in accounts.OAUTH:
         need('gpg')
+        if not os.path.isfile(accounts.OAUTH2):
+            sys.exit('twigs: OAuth helper missing: run `twigs doctor oauth`; set TWIGS_OAUTH_HELPER if needed')
         os.makedirs(os.path.dirname(a.token), exist_ok=True)
         if os.path.exists(a.token):     # signing in again starts over: the file keeps the old flow
             os.remove(a.token)
@@ -132,14 +135,19 @@ def has_calendar():
 
 def sections():
     """Emails and Messages, as they're set up (either, both, or neither): what msg adds to a canvas."""
-    from . import chat, mail
+    from . import chat
     out = []
     if os.path.exists(accounts.NOTMUCH):
         found = configured()
         if found:
+            try:
+                from . import mail
+            except (ImportError, OSError):
+                mail = None
             defaults = accounts.load()[0]
-            out.append(('Emails', mail.Mail(found, notify=defaults.get('notify', True), remember=state('mail-view.json'),
-                                            beacon_days=defaults.get('beacon_days', 30), later=state('later.json'))))
+            if mail is not None:
+                out.append(('Emails', mail.Mail(found, notify=defaults.get('notify', True), remember=state('mail-view.json'),
+                                                beacon_days=defaults.get('beacon_days', 30), later=state('later.json'))))
     c = accounts.chat_settings()
     if c['enabled'] and shutil.which(c['nchat']) and chat.has_profiles(c['confdir'] or chat.confdir()):
         out.append(('Messages', chat.Chat(c['nchat'], c['confdir'], state('nchat-serve.log'),
@@ -177,6 +185,7 @@ def chat_setup():
     c = accounts.chat_settings()
     if not shutil.which(c['nchat']):
         sys.exit(f"msgcanvas: no {c['nchat']}: build nchat (github.com/3-mmc/nchat) or set [chat] nchat")
+    print('For Instagram cookie instructions: twigs msg chat-setup instagram --help\n')
     print('nchat asks which service, then shows a QR code or asks for a code. Scan or type it,\n'
           'and when nchat opens on your chats, quit it (Ctrl-Q): msgcanvas uses it from then on.\n')
     sys.exit(subprocess.call([c['nchat'], '--setup'] + (['-d', c['confdir']] if c['confdir'] else [])))
@@ -198,6 +207,9 @@ def main(argv=None):
         if not has_calendar():
             sys.exit('msgcanvas: no calendars yet: `calcanvas add NAME` (github.com/3-mmc/calcanvas)')
         fc.pick(argv[1] if len(argv) == 2 else '', provider=calendar(), **LOOK)
+    elif cmd == 'chat-setup' and argv[1:] == ['instagram', '--help']:
+        from .onboarding import INSTAGRAM
+        print(INSTAGRAM)
     elif cmd == 'chat-setup' and len(argv) == 1:
         chat_setup()
     elif cmd == 'import-thunderbird' and len(argv) == 1:

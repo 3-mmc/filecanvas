@@ -2,9 +2,11 @@
 
     twigs                        every installed twig that adds to it, side by side
     twigs APP [...]              one of them: files, msg, cal, tasks (`twigs APP help`)
+    twigs doctor [FEATURE]       check dependencies; --platform macos|arch|ubuntu|debian, --json
+    twigs --version              show the package version
     twigs apps                   which twigs there are, which are installed, and what each needs
-    twigs install [APP ...]      put `twigs` (and msgcanvas, calcanvas) on your PATH, for these twigs
-                                 (all if none named); `--only APP …` the same, saying so
+    twigs install [APP ...]      select enabled twigs (all if none named); --only APP … also works
+                                 source checkouts also make PATH symlinks
 """
 import os, sys
 
@@ -23,6 +25,9 @@ def listing():
         print(f"  {name:<6} {app['summary']:<38} {state}" + (f"  (aka {app['alias']})" if app.get('alias') else ''))
         for what, how in lack:
             print(f'           needs {what}: {how}')
+        for feature, needs in app.get('feature_needs', {}).items():
+            for what, how in apps.missing(dict(needs=needs)):
+                print(f'           {feature} needs {what}: {how}')
 
 
 def link(name, target=LAUNCHER):
@@ -46,7 +51,8 @@ def install(names):
     if unknown:
         sys.exit(f"twigs: no twig {', '.join(unknown)} (twigs: {', '.join(every)})")
     apps.keep(names)
-    made = [n for n in ['twigs'] + [every[n]['alias'] for n in names if every[n].get('alias')] if link(n)]
+    made = ([n for n in ['twigs'] + [every[n]['alias'] for n in names if every[n].get('alias')] if link(n)]
+            if os.path.isfile(LAUNCHER) else [])
     print(f"twigs: {', '.join(names)} installed" + (f"; on your PATH now: {', '.join(made)}" if made else ''))
     for n in names:
         for what, how in apps.missing(every[n]):
@@ -81,6 +87,12 @@ def main(argv=None):
     every = apps.every()
     if cmd in ('-h', '--help', 'help'):
         print(__doc__.strip())
+    elif cmd in ('--version', 'version'):
+        from twigs import __version__
+        print(f'twigs {__version__}')
+    elif cmd == 'doctor':
+        from twigs.kit.doctor import main as doctor
+        return doctor(argv[1:])
     elif cmd == 'apps':
         listing()
     elif cmd == 'install':
@@ -94,4 +106,4 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

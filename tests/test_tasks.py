@@ -1,5 +1,4 @@
-"""tasks, tuido's desk on the canvas (pytest, in a Python with tuido: tuido's .venv,
-PYTHONPATH=this repo): its tree, marking, planning, adding, continuing, undo, and watching the
+"""The bundled task desk (pytest, with no standalone TuiDo installation): its tree, marking, planning, adding, continuing, undo, and watching the
 file for changes made beside it. Each test has its own database; none touches yours."""
 import re
 import sqlite3
@@ -10,13 +9,12 @@ import unittest
 
 try:
     import pytest
-    import tuido  # noqa: F401
-except ImportError:         # under plain unittest, or without tuido: these are pytest's, in tuido's Python
-    raise unittest.SkipTest('tasks: run with pytest in a Python that has tuido')
+except ImportError:         # these are pytest tests; unittest can run the other modules
+    raise unittest.SkipTest('tasks: install twigs-cli[test] and run pytest')
 
 from twigs import core as tc
 from twigs.apps.tasks.canvas import Desk, boxes
-from tuido.store import Store
+from twigs.apps.tasks.model.store import Store
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
 

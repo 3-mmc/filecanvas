@@ -27,7 +27,7 @@ only fetches (`Sync Pull`): reading, flags and deleting don't reach the server y
 
 ```
 sudo apt install isync notmuch python3-notmuch2 msmtp pass libsasl2-modules-kdexoauth2 neomutt
-ln -s "$PWD/msgcanvas-launcher" ~/.local/bin/msgcanvas    # once: `msgcanvas` anywhere
+twigs doctor mail       # platform-specific dependencies and Python binding checks
 msgcanvas setup          # starts ~/.config/msgcanvas/accounts.toml: fill it in,
 msgcanvas import-thunderbird   # or add the accounts Thunderbird has (not its passwords)
 msgcanvas setup          # again: makes the mbsync, msmtp and notmuch configs from it
@@ -101,6 +101,15 @@ branch and press **⌃Y** again to restore it. Pinning an archived chat also res
 choices are saved alongside the chat view settings and override the displayed server flags;
 they never send pin/archive commands to the service. Archived chats stay quiet on new arrivals.
 The sender's coloured chip covers the name alone; dates, times and receipts below it stay plain.
+
+For Instagram cookie login, run `twigs msg chat-setup instagram --help`. Sign into
+`instagram.com/direct/inbox/`, open Developer Tools → Network, reload, then copy an
+authenticated `instagram.com` request as cURL **POSIX/bash**. Paste that into nchat's
+cookie prompt. The relevant session is Instagram's (`sessionid`, `csrftoken`, `mid`,
+`ig_did`, `ds_user_id`), even if you used Facebook to sign in. Facebook cookies do not
+work with the current Instagram adapter. Keep copied cookies out of chat and issue reports.
+See the [upstream Meta authentication guide](https://docs.mau.fi/bridges/go/meta/authentication.html).
+Messenger requires its own nchat protocol adapter; it is not enabled by these Instagram steps.
 
 A profile nchat is open on is locked: msgcanvas shows it greyed until nchat is closed. Its
 `[chat]` settings in accounts.toml can name another `nchat`, its `confdir`, or turn chats off

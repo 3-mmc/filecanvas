@@ -12,7 +12,7 @@ from twigs import core as fc
 from twigs.kit.dates import when_group
 
 from . import files
-from .mail import SEP
+from .common import SEP
 
 PROTOCOLS = {'WhatsAppMd': 'WhatsApp', 'Signal': 'Signal', 'Instagram': 'Instagram',
              'Telegram': 'Telegram', 'Dummy': 'Dummy'}
