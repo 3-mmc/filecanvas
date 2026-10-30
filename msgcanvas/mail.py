@@ -178,6 +178,12 @@ def count(msgs):
     return sum(1 + count(m['replies']) for m in msgs)
 
 
+def newest_unread(msgs):
+    """When the newest unread message among `msgs` and their replies came; None if none is."""
+    got = [d for m in msgs for d in ([m['date']] if m['unread'] else []) + [newest_unread(m['replies'])] if d]
+    return max(got) if got else None
+
+
 def any_of(msgs, key):
     return any(m[key] or any_of(m['replies'], key) for m in msgs)
 
@@ -196,8 +202,10 @@ class Mail(fc.Provider):
     SPLITS = {'none': (), 'unread': (('Unread', 'thread:{tag:unread}'), ('Read', 'not thread:{tag:unread}')),
               'flagged': (('Flagged', 'thread:{tag:flagged}'), ('The rest', 'not thread:{tag:flagged}'))}
 
-    def __init__(self, accounts, watch=2.0, pick=None, notify=True, grouping='date', remember=None, split='none'):
+    def __init__(self, accounts, watch=2.0, pick=None, notify=True, grouping='date', remember=None, split='none',
+                 beacon_days=30):
         self.accounts, self.notify = accounts, notify
+        self.beacon_days = beacon_days          # unread mail newer than this is a beacon; older, just ●
         self.pick = pick or (lambda start: fc.pick(start, glyphs='plain'))   # a file, to attach
         self.remember_in = remember             # a file the grouping is kept in, from one time to the next
         self.grouping = self.recall('grouping', self.GROUPINGS) or grouping
@@ -506,6 +514,16 @@ class Mail(fc.Provider):
         if node.kind in ('group', 'part') and node.data['unread']:
             return 'git_dirty', '●', '*'
         return None
+
+    def beacon(self, node):
+        """Unread threads and messages as beacons: blinking while they're new, then lit, for
+        beacon_days; older unread mail just keeps its ●."""
+        came = None
+        if node.kind == 'thread' and node.data['unread']:
+            came = newest_unread(node.data['messages'])
+        elif node.kind == 'message' and node.data['unread']:
+            came = node.data['date']
+        return came if came and time.time() - came < self.beacon_days * 86400 else None
 
     def mark_before(self, node):
         return node.kind in ('part', 'group', 'thread', 'message')     # unread, before the subject, as tuido's states

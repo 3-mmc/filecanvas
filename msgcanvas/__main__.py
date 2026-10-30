@@ -123,7 +123,8 @@ def browse(start):
         found = configured()
         if found:
             defaults = accounts.load()[0]
-            providers.append(mail.Mail(found, notify=defaults.get('notify', True), remember=state('mail-view.json')))
+            providers.append(mail.Mail(found, notify=defaults.get('notify', True), remember=state('mail-view.json'),
+                                             beacon_days=defaults.get('beacon_days', 30)))
     c = accounts.chat_settings()
     if c['enabled'] and shutil.which(c['nchat']) and chat.has_profiles(c['confdir'] or chat.confdir()):
         providers.append(chat.Chat(c['nchat'], c['confdir'], state('nchat-serve.log'), read_receipts=c['read_receipts'],

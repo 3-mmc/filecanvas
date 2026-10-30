@@ -4,7 +4,9 @@ Mail and chat on one canvas you move across: accounts branch into folders (their
 in a column of their own), folders into groups (by date: Today, Yesterday, This week, Last week,
 Earlier this month, each month, each year; or by sender; or none: **⌃L** switches, and it's
 remembered; and before that, if you like, split in two: **⌃T** puts Unread apart from Read, then
-Flagged apart from The rest, a thread at a time, then neither; remembered too), groups into threads, threads into who replied to whom. The message you're on opens
+Flagged apart from The rest, a thread at a time, then neither; remembered too),
+unread mail a beacon (white on red, blinking fast when it's just come, slower as it ages, lit
+after an hour; for `beacon_days`, 30 unless `[defaults]` says, then just ●), groups into threads, threads into who replied to whom. The message you're on opens
 onto what it says, on the canvas: its subject, who it's from and to (each in their colour, their
 address beside), when, its body a paragraph at a time (a long one's start, then **↓ more**), and
 what's attached. Pictures show in a pane beside.
@@ -54,7 +56,8 @@ Chats come from [nchat](https://github.com/3-mmc/nchat) (the `feature/serve` bra
 merged), which msgcanvas runs as `nchat --serve`: profiles (WhatsApp, Signal, Instagram, …) sit
 beside the mail accounts, each opening into its chats: the pinned ones on a branch of their own
 first (how many, and how many of them unread, beside it; it flashes when one of them hears from
-someone), then the rest, the latest first. A chat
+someone), then the rest, the latest first. A chat with something unread is a beacon too, until you've been in
+and read it. A chat
 opens on the canvas itself into its latest 20 messages, oldest at the top: each person's messages
 in a row hang off their name (a chip in their own colour, the same in every chat, and never two
 alike in one), each whole, ending in its time and, if

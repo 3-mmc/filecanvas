@@ -506,6 +506,14 @@ class Chat(fc.Provider):
     def width(self, node):
         return MESSAGE_WIDTH if node.kind == 'chat-message' else None
 
+    def beacon(self, node):
+        """A chat with something unread, as a beacon from its latest message: blinking while it's
+        new, lit after; gone once you've been in and read it."""
+        if node.kind != 'chat':
+            return None
+        c = self.chat(node)
+        return c.get('last_message_time', 0) / 1000 if c.get('unread') and c.get('last_message_time', -1) > 0 else None
+
     def chip(self, node):
         """A run's name in its writer's colour (you: the bar's first chip's), and a chat that's
         open in its own: the other person's, or the group's, so open chats stand apart."""

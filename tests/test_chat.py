@@ -147,6 +147,34 @@ class Events(unittest.TestCase):
         c.changed_at(profile.path)                                              # the chats changed:
         self.assertEqual(stale, [profile.path, chat.pinned_id(profile.path)])  # the pinned ones too
 
+    def test_an_unread_chat_is_a_beacon_from_its_latest_message(self):
+        s = chat.Serve.detached()
+        s.apply({'event': 'hello', 'profiles': [{'profile': 'W_1', 'protocol': 'WhatsAppMd', 'self': 'me', 'features': []}]})
+        s.apply({'event': 'chats', 'profile': 'W_1', 'chats': [
+            {'id': 'ann', 'name': 'Ann', 'unread': True, 'last_message_time': 1_700_000_000_000},
+            {'id': 'bo', 'name': 'Bo', 'last_message_time': 1_700_000_500_000}]})
+        c, p = chat.Chat(serve=s), s.profiles['W_1']
+        node = lambda cid: fc.Node(chat.chat_id('W_1', cid), cid, True, None, 'chat', source=c, data=(p, cid))
+        self.assertEqual(c.beacon(node('ann')), 1_700_000_000)
+        self.assertIsNone(c.beacon(node('bo')))
+
+    def test_together_passes_beacons_on_and_wakes_for_the_soonest_change(self):
+        class Soon(fc.Tree):
+            KINDS = ('fi',)
+
+            def __init__(self, at):
+                super().__init__({'x': 1})
+                self.at = at
+
+            def next_change(self):
+                return self.at
+
+            def beacon(self, node):
+                return 42.0
+        both = together.Together([Soon(None), Soon(300.0), Soon(200.0)])
+        self.assertEqual(both.next_change(), 200.0)
+        self.assertEqual(both.beacon(fc.Node('/x', 'x', False, None, 'fi')), 42.0)
+
     def test_a_skipped_profile_is_kept(self):
         s, _ = self.serve()
         self.assertEqual(s.skipped, [{'profile': 'Signal_+492', 'why': 'locked'}])

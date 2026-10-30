@@ -59,6 +59,17 @@ class Together(fc.Provider):
             return node.data
         return self.ask('preview', node, None)
 
+    def tint(self, node):
+        return self.ask('tint', node, [])
+
+    def beacon(self, node):
+        return self.ask('beacon', node, None)
+
+    def next_change(self):
+        """The soonest any of them changes by itself."""
+        got = [t for t in (p.next_change() for p in self.providers) if t is not None]
+        return min(got) if got else None
+
     def mark_before(self, node):
         return self.ask('mark_before', node, False)
 

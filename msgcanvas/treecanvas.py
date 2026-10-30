@@ -1,4 +1,4 @@
-# Vendored from treecanvas (github.com/3-mmc/treecanvas) at a662a64: do not edit here.
+# Vendored from treecanvas (github.com/3-mmc/treecanvas) at ebd2cc2: do not edit here.
 # Change it there and run tools/vendor-treecanvas.py; msgcanvas's own choices are in its providers.
 """treecanvas: a tree as one canvas you move across; the file system, unless you give it another.
 (It was filecanvas: the file system is still what it shows by default.)
@@ -23,7 +23,7 @@ Settings are flags (--help), and any of them can live in ~/.config/treecanvas/co
 The file system is one provider of the tree (FileSystem); anything else can be another
 (Provider, and Tree for nested dicts): `pick(provider=...)`.
 """
-import argparse, functools, json, os, re, select, shutil, stat, subprocess, sys, threading, time, unicodedata
+import argparse, functools, json, math, os, re, select, shutil, signal, stat, subprocess, sys, threading, time, unicodedata
 from concurrent.futures import ThreadPoolExecutor
 
 CONFIG = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'),
@@ -43,6 +43,7 @@ OLD_CONFIG = CONFIG.replace(os.sep + 'treecanvas' + os.sep, os.sep + 'filecanvas
 #   home_* seg_* cwd_fg sep_fg               the path bar, as powerline-shell draws a prompt
 #   repo_clean_* repo_dirty_*                the bar's git chip
 #   git_dirty git_staged git_untracked git_conflict   the marks beside changed entries
+#   alert_fg alert_bg                  a beacon lit (git_conflict's red and white unless a theme says)
 #   person0 … person9, person_fg       chips for people (a chat's senders), and their text
 #   state_done state_doing             what's finished and what's under way (a task tree's)
 # `ls_colors` is the theme's default for --ls-colors; you can still change it.
@@ -289,6 +290,11 @@ SHOWN_NOTE = 5.0    # and a notice
 DISSOLVE = 0.8      # what's gone turning to dust
 REVEAL = 0.45       # new lines at the end of a following pane resolving out of noise
 SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+SPIN_STEP = 1 / 12  # seconds a spinner's frame shows
+FRAME = 1 / 60      # between frames while something moves
+BLINK_FAST = 0.25   # a beacon's half-blink (lit, then not) when what it marks has just come
+BLINK_SLOW = 3.0    # and when it's BLINK_FOR old: each half-blink longer than the last till then
+BLINK_FOR = 3600.0  # after that, it stays lit
 NOISE = '░▒▓<>/\\|_-=+*#%&$@01'     # cdeck's
 DUST = '▓▒░· '
 SGR_RE = re.compile(r'\x1b\[[0-9;]*m')
@@ -381,6 +387,45 @@ class Picture:
         return [l for l in lines if l != '\033[0m']
 
 
+# -- waking the canvas
+
+_WAKE = None    # the running canvas's pipe: a byte written there wakes it
+
+
+def wake():
+    """From any thread: the canvas looks again now, rather than when it next meant to (a key,
+    or the next thing it knows will change). invalidate() and signal() call it."""
+    w = _WAKE
+    if w is not None:
+        try:
+            os.write(w, b'.')
+        except OSError:         # full (it's awake already), or closed (it's gone)
+            pass
+
+
+def blink(age):
+    """A beacon `age` seconds old: (lit, seconds until that changes, or None for never). Fast at
+    first (BLINK_FAST on, BLINK_FAST off), each half-blink a little longer, BLINK_SLOW by
+    BLINK_FOR, and lit from then on. The half-blinks' lengths grow evenly with age, h(t) = a + t/k,
+    so the half-blinks so far are ∫ dt / h = k·ln(h / a): the next flip's time comes straight out."""
+    age = max(0.0, age)
+    if age >= BLINK_FOR:
+        return True, None
+    k = BLINK_FOR / (BLINK_SLOW - BLINK_FAST)
+    n = int(k * math.log((BLINK_FAST + age / k) / BLINK_FAST))
+    flip = (BLINK_FAST * math.exp((n + 1) / k) - BLINK_FAST) * k
+    return n % 2 == 0, min(flip, BLINK_FOR) - age
+
+
+def update(lines, shown):
+    """What to write for the terminal to show `lines`, when it shows `shown`: only the lines that
+    differ, each where it goes (a blink rewrites one line, not the screen)."""
+    out = [f'\033[{i + 1}H{line}\033[K' for i, line in enumerate(lines) if i >= len(shown) or shown[i] != line]
+    if len(shown) > len(lines):
+        out.append(f'\033[{len(lines) + 1}H\033[J')
+    return '\033[?2026h' + ''.join(out) + '\033[?2026l' if out else ''
+
+
 # -- git
 
 class Git:
@@ -459,6 +504,7 @@ class Git:
             self.info[root] = {'files': files, 'prefixes': prefixes, 'agg': agg, 'dirty': dirty}
             self.pending.discard(root)
             self.changed = True
+        wake()
 
     def wait(self):
         while self.pending:
@@ -636,6 +682,23 @@ class Provider:
         right-aligned after the column's names, so they line up to be read down. None for none."""
         return None
 
+    def beacon(self, node):
+        """When what `node` marks came (time.time()), to draw it as a beacon: white on red, blinking
+        fast at first, slower as it ages, then steadily lit (lit throughout when calm); None for
+        none. Something new and unread, say: once it's read, return None and invalidate()."""
+        return None
+
+    def next_change(self):
+        """When (time.time()) what's drawn next changes by itself, with nothing to tell the canvas
+        (a countdown ticking over, a clock): it draws again then. None: only when told."""
+        return None
+
+    def tint(self, node):
+        """The start of `node`'s label in colours of its own: [(how many characters, colour, bold)],
+        in order from its first (a date's day and weekday, a time); [] for the label's own colour.
+        A colour is a theme role or a colour ('#ff8c2a', 208). Not on the choice or a chip."""
+        return []
+
     def mark_before(self, node):
         """Whether `node`'s mark goes before its label (a task's ✓), not after (a file's git ●).
         A column with any mark before keeps room for one, so its labels line up."""
@@ -665,6 +728,7 @@ class Provider:
         with STALE:
             self.__dict__.setdefault('_stale', set()).add(path)
         self.changed = True
+        wake()
 
     def stale(self):
         """The ids invalidate() was given since last asked."""
@@ -688,6 +752,7 @@ class Provider:
         with STALE:
             self.__dict__.setdefault('_signals', []).append(what)
         self.changed = True
+        wake()
 
     def signals(self):
         """What pulse() and status() were given since last asked."""
@@ -964,6 +1029,9 @@ class Canvas:
         self._at_end = False                # the pane showed its last line
         self.asking = None                  # (prompt, text, done, choices, changed): the typing line, open
         self.clock = time.monotonic         # for motion (tests set their own)
+        self.wall = time.time               # for beacons and next_change(), which are dated
+        self.flowing = False                # the last frame was mid-motion: the next must follow
+        self.next_beacon = None             # seconds from the last frame to a beacon's next flip
         self.pulses = {}                    # node id: when its row began to flash
         self.statuses = {}                  # key: (text, state, since): chips in the bar
         self.reveal = None                  # (node, first new line, since) in a following pane
@@ -1001,6 +1069,29 @@ class Canvas:
         if self.reveal and now - self.reveal[2] >= REVEAL:
             self.reveal = None
         return bool(self.pulses or self.statuses or self.reveal)
+
+    def due(self):
+        """Seconds until the canvas must draw again by itself: FRAME while something moves, else
+        until the next thing that changes on its own (a spinner's step, a chip going, a beacon's
+        blink, the provider's next_change()); None when nothing will, until a key or a wake()."""
+        if self.flowing:
+            return FRAME
+        now, waits = self.clock(), []
+        last = {'ok': SHOWN_OK, 'failed': SHOWN_FAILED, 'note': SHOWN_NOTE}
+        for _, state, since in self.statuses.values():
+            if state == 'busy':
+                waits.append(SPIN_STEP if self.animate else None)
+            elif state in last:
+                waits.append(since + last[state] - now)
+        if self.source.busy():
+            waits.append(SPIN_STEP)
+        if self.next_beacon is not None:
+            waits.append(self.next_beacon)
+        at = self.source.next_change()
+        if at is not None:
+            waits.append(at - self.wall())
+        waits = [w for w in waits if w is not None]
+        return max(0.0, min(waits)) if waits else None
 
     def say(self, text):
         """A line in the bar until the next key: what an action did."""
@@ -1191,10 +1282,18 @@ class Canvas:
         place(self.root, 0, 0, self.focus, o, nodes)
 
         marks, chips = {}, {}   # (the mark beside it, how bright it is), and its chip colours, per entry
+        wall, self.next_beacon = self.wall(), None
+        alert = (T.get('alert_fg', 15), T.get('alert_bg', T.get('git_conflict', 160)))
         for n in nodes:
             stub = isinstance(n, Stub)
             marks[id(n)] = (None, 1.0) if stub else (self.source.mark(n), self.source.dim(n))
             chips[id(n)] = None if stub else self.source.chip(n)
+            came = None if stub else self.source.beacon(n)
+            if came is not None:    # a beacon: a chip in the alert's colours when lit, its red when not
+                lit, flips = blink(wall - came) if animate else (True, None)
+                chips[id(n)] = alert if lit else (alert[1], 'bg')
+                if flips is not None:
+                    self.next_beacon = flips if self.next_beacon is None else min(self.next_beacon, flips)
         before = {id(n) for n in nodes if marks[id(n)][0] and self.source.mark_before(n)}
         leads = {n.depth: 2 for n in nodes if id(n) in before}    # room for a mark before, the column over
         counts = {id(n): self.source.count(n) for n in nodes if not isinstance(n, Stub)}
@@ -1318,6 +1417,11 @@ class Canvas:
                                  1 - (1 - s) * t, True)
                 for i, l in enumerate(lines):
                     put(x, n.row + i, l, style)
+                at, i = x, 0     # the label's start, over again in the provider's colours
+                for count, c, bold in [] if isinstance(n, Stub) else self.source.tint(n):
+                    part, i = text[i:i + count], i + count
+                    put(at, n.row, part, P.fg(c, s, bold))
+                    at += cells(part)
                 cur = x + cells(text)
             if mark and id(n) in before:
                 role, glyph, ascii_ = mark
@@ -1380,6 +1484,8 @@ class Canvas:
                                      ('pgup/pgdn scroll  ' if pane_w else '') + '⏎ choose  esc cancel'])
             lines.append(P.fg('hint') + clip(hint, full - 1) + '\033[0m')
         # motion begun while drawing (a pane's reveal) counts too: the next frame must follow
+        self.flowing = animate and ((ox, oy) != (round(tx), round(ty)) or bool(self.pulses or self.reveal) or
+                                    any(v[1] == 'gone' for v in self.statuses.values()))
         return lines, (ox, oy) != (round(tx), round(ty)) or self.source.busy() or moving_parts or \
             bool(self.reveal)
 
@@ -1759,23 +1865,42 @@ def run(opts):
     def out(s):
         tty.write(s.encode())
 
+    global _WAKE
     result = None
+    wake_r, wake_w = os.pipe()          # wake(): a byte here (from a provider's thread, or a resize)
+    os.set_blocking(wake_r, False)
+    os.set_blocking(wake_w, False)
+    _WAKE, resized = wake_w, None
+    try:
+        resized = signal.signal(signal.SIGWINCH, lambda *_: wake())
+    except (ValueError, AttributeError):    # not the main thread, or no SIGWINCH: look now and then
+        pass
     try:
         ttymod.setraw(fd)
         out('\033[?1049h\033[?25l')
         animate = not os.environ.get('CDECK_CALM')
-        size, dirty = None, True
+        size, dirty, shown = None, True, []
         while True:
             if os.get_terminal_size(fd) != size:
-                size, dirty = os.get_terminal_size(fd), True
+                size, dirty, shown = os.get_terminal_size(fd), True, []
             if c.source.changed:
                 c.source.changed, dirty = False, True
             if dirty:
-                lines, moving = c.frame(*size, animate)
-                out('\033[?2026h\033[H' + '\r\n'.join(l + '\033[K' for l in lines) + '\033[?2026l')
-                dirty = moving
-            ready, _, _ = select.select([fd], [], [], 1 / 60 if moving else 0.25)
-            if not ready:
+                lines, _ = c.frame(*size, animate)
+                out(update(lines, shown))
+                shown, dirty = lines, False
+            wait = c.due()
+            if resized is None:
+                wait = 0.5 if wait is None else min(wait, 0.5)
+            ready, _, _ = select.select([fd, wake_r], [], [], wait)
+            if wake_r in ready:
+                try:
+                    while os.read(wake_r, 512):
+                        pass
+                except BlockingIOError:
+                    pass
+            if fd not in ready:
+                dirty = dirty or not ready      # its time came: draw; woken: if anything changed
                 continue
             dirty = True
             data = os.read(fd, 1024).decode(errors='replace')
@@ -1800,6 +1925,11 @@ def run(opts):
                     out('\033[?1049h\033[?25l')
                     size = None
     finally:
+        _WAKE = None
+        if resized is not None:
+            signal.signal(signal.SIGWINCH, resized)
+        os.close(wake_r)
+        os.close(wake_w)
         out('\033[?25h\033[?1049l')
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
     return result[1] if result and result[0] == 'done' else None

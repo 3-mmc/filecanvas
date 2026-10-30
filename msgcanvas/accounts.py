@@ -55,7 +55,8 @@ TEMPLATE = '''# msgcanvas's mail accounts. After editing: `msgcanvas setup` make
 # Chats come from nchat (`msgcanvas chat-setup` adds a WhatsApp, Signal or Instagram account).
 # [chat] can say: nchat = "path/to/nchat", confdir = "nchat's folder", enabled = false, and
 # read_receipts / typing / notify = false (telling people you've read or are typing; desktop
-# notifications). [defaults] notify = false stops mail's notifications.
+# notifications). [defaults] notify = false stops mail's notifications; beacon_days = 30 is how
+# long unread mail stays a beacon (white on red, blinking while it's new), 0 for never.
 
 [defaults]
 real_name = "{real_name}"

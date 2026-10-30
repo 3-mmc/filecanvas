@@ -282,6 +282,17 @@ class Provider(unittest.TestCase):
         self.screen(c)
         self.assertEqual([k.kind for k in c.focus.shown()], ['thread', 'thread'])
 
+    def test_unread_threads_and_messages_are_beacons_from_their_newest_unread(self):
+        c = self.canvas('home/INBOX')
+        kiln = next(k for k in c.focus.parent.shown() if k.label() == 'Kiln quote')
+        bo = next(m for m in mail.Mail.children(c.source, next(k for k in kiln.load() if k.kind == 'message'))
+                  if m.kind == 'message')
+        self.assertEqual(c.source.beacon(kiln), bo.data['date'])          # Bo's reply: the one unread
+        self.assertEqual(c.source.beacon(bo), bo.data['date'])
+        self.assertIsNone(c.source.beacon(next(k for k in c.focus.parent.shown() if k.label() == 'Your pass')))
+        c.source.beacon_days = (time.time() - bo.data['date']) / 86400 - 1     # older than that: just ●
+        self.assertIsNone(c.source.beacon(kiln))
+
     def test_the_grouping_is_remembered(self):
         kept = os.path.join(TMP, 'view.json')
         p = mail.Mail(self.accounts, watch=0, remember=kept)
