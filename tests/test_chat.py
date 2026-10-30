@@ -122,6 +122,31 @@ class Events(unittest.TestCase):
         mine.open = True
         self.assertEqual(c.chip(mine), ('home_fg', 'home_bg'))         # your own chat
 
+    def test_pinned_chats_branch_off_first(self):
+        changed = []
+        s = chat.Serve.detached(changed.append)
+        s.apply({'event': 'hello', 'profiles': [{'profile': 'W_1', 'protocol': 'WhatsAppMd', 'self': 'me', 'features': []}]})
+        s.apply({'event': 'chats', 'profile': 'W_1', 'chats': [
+            {'id': 'ann', 'name': 'Ann', 'pinned': True, 'last_message_time': 5},
+            {'id': 'bo', 'name': 'Bo', 'last_message_time': 9},
+            {'id': 'cy', 'name': 'Cy', 'pinned': True, 'unread': True, 'last_message_time': 7},
+            {'id': 'old', 'name': 'Old', 'pinned': True, 'archived': True, 'last_message_time': 1}]})
+        c = chat.Chat(serve=s)
+        p = s.profiles['W_1']
+        p.asked_chats = True
+        profile = fc.Node(chat.profile_id('W_1'), 'WhatsApp', True, None, 'profile', source=c, data=p)
+        kids = c.children(profile)
+        self.assertEqual([(k.kind, k.name) for k in kids], [('pinned', 'Pinned'), ('chat', 'Bo'), ('chat', 'Old')])
+        pinned = kids[0]
+        self.assertEqual([k.name for k in c.children(pinned)], ['Cy', 'Ann'])     # the latest first
+        self.assertEqual(c.children(pinned)[0].path, chat.chat_id('W_1', 'cy'))  # the same chat, wherever it is
+        self.assertEqual(c.count(pinned), ('1/2', 'git_dirty', True))           # one of two unread
+        self.assertEqual(c.mark(pinned)[1], '●')
+        stale = []
+        c.invalidate = stale.append
+        c.changed_at(profile.path)                                              # the chats changed:
+        self.assertEqual(stale, [profile.path, chat.pinned_id(profile.path)])  # the pinned ones too
+
     def test_a_skipped_profile_is_kept(self):
         s, _ = self.serve()
         self.assertEqual(s.skipped, [{'profile': 'Signal_+492', 'why': 'locked'}])

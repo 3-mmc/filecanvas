@@ -187,27 +187,32 @@ class Mail(fc.Provider):
     messages, each with its replies; the message you're on opens onto what it says, on the
     canvas: its subject, who it's from and to (in their colours), when, its body, what's attached.
     `KINDS` are the node kinds it answers for."""
-    KINDS = ('account', 'folder', 'group', 'thread', 'message', 'subject', 'person', 'when', 'body', 'more',
+    KINDS = ('account', 'folder', 'part', 'group', 'thread', 'message', 'subject', 'person', 'when', 'body', 'more',
              'attachment', 'drafts', 'draft')
     pane = True             # only for a message's pictures (pane_for)
     GROUPINGS = ('date', 'sender', 'all')
+    # how a folder splits before it groups: not, into Unread / Read, or into Flagged / The rest, a
+    # thread at a time (one with any unread message is unread, whole)
+    SPLITS = {'none': (), 'unread': (('Unread', 'thread:{tag:unread}'), ('Read', 'not thread:{tag:unread}')),
+              'flagged': (('Flagged', 'thread:{tag:flagged}'), ('The rest', 'not thread:{tag:flagged}'))}
 
-    def __init__(self, accounts, watch=2.0, pick=None, notify=True, grouping='date', remember=None):
+    def __init__(self, accounts, watch=2.0, pick=None, notify=True, grouping='date', remember=None, split='none'):
         self.accounts, self.notify = accounts, notify
         self.pick = pick or (lambda start: fc.pick(start, glyphs='plain'))   # a file, to attach
         self.remember_in = remember             # a file the grouping is kept in, from one time to the next
-        self.grouping = self.recall() or grouping
+        self.grouping = self.recall('grouping', self.GROUPINGS) or grouping
+        self.split = self.recall('split', self.SPLITS) or split
         self.lines = {}                         # a message's path: how many lines of its body show
         self.parsed = {}                        # a message's path: what's in it, read once
         self._seen = None
         if watch:
             threading.Thread(target=self.watch, args=(watch,), daemon=True).start()
 
-    def recall(self):
+    def recall(self, what, allowed):
         try:
             with open(self.remember_in) as f:
-                got = json.load(f).get('grouping')
-            return got if got in self.GROUPINGS else None
+                got = json.load(f).get(what)
+            return got if got in allowed else None
         except (TypeError, OSError, ValueError):
             return None
 
@@ -215,7 +220,7 @@ class Mail(fc.Provider):
         if self.remember_in:
             try:
                 with open(self.remember_in, 'w') as f:
-                    json.dump({'grouping': self.grouping}, f)
+                    json.dump({'grouping': self.grouping, 'split': self.split}, f)
             except OSError:
                 pass
 
@@ -276,7 +281,9 @@ class Mail(fc.Provider):
                 return [fc.Node('/' + a.key, a.name, True, node, 'account', data=a) for a in self.accounts]
             if k == 'account':
                 return self.folders(node)
-            if k == 'folder':
+            if k == 'folder' and self.split != 'none':
+                return self.parts(node)
+            if k in ('folder', 'part'):
                 return self.groups(node) if self.grouping != 'all' else self.threads(node, node.data['query'])
             if k == 'group':
                 return self.threads(node, node.data['query'], node.data['tids'])
@@ -314,6 +321,22 @@ class Mail(fc.Provider):
         if not nodes:
             raise OSError(0, 'no mail yet: msgcanvas sync')
         return nodes
+
+    def parts(self, node):
+        """A folder split in two before it's grouped (Unread / Read, or Flagged / The rest); a part
+        with nothing in it isn't shown."""
+        out = []
+        with database() as db:
+            for name, cond in self.SPLITS[self.split]:
+                q = f'({node.data["query"]}) and {cond}'
+                total = db.count_messages(q)
+                if total:
+                    out.append(fc.Node(f'{node.path}{SEP}{self.split}:{name}', name, True, node, 'part',
+                                       data=dict(query=q, total=total, unread=db.count_messages(q + ' and tag:unread'),
+                                                 flagged=name == 'Flagged')))
+        if not out:
+            raise OSError(0, 'empty')
+        return out
 
     def groups(self, node):
         """A folder's threads in groups: by when the newest message in each came (Today, Yesterday,
@@ -436,6 +459,9 @@ class Mail(fc.Provider):
             return (f'{d["unread"]:,}', 'git_dirty', True) if d['unread'] else None
         if k == 'group':
             return f'{len(d["tids"]):,}', 'stub', False
+        if k == 'part':          # what's in it: unread ones stand out, as a folder's do
+            return (f'{d["total"]:,}', 'git_dirty', True) if d['unread'] == d['total'] else \
+                (f'{d["total"]:,}', 'git_staged' if d['flagged'] else 'stub', d['flagged'])
         if k == 'thread' and d['count'] > 1:
             return str(d['count']), 'stub', False
         if k == 'person' and d['address']:
@@ -454,7 +480,7 @@ class Mail(fc.Provider):
             return 'path', True
         if k in ('when', 'more'):
             return 'stub', False
-        if k == 'group' and node.data['unread']:
+        if k in ('group', 'part') and node.data['unread']:
             return 'dir', True
         return ('dir', True) if self.unread(node) else None
 
@@ -475,12 +501,14 @@ class Mail(fc.Provider):
                 return 'git_dirty', '●', '*'
             if node.data['flagged']:
                 return 'git_staged', '★', '!'
-        if node.kind == 'group' and node.data['unread']:
+        if node.kind == 'part' and node.data['flagged']:
+            return 'git_staged', '★', '!'
+        if node.kind in ('group', 'part') and node.data['unread']:
             return 'git_dirty', '●', '*'
         return None
 
     def mark_before(self, node):
-        return node.kind in ('group', 'thread', 'message')     # unread, before the subject, as tuido's states
+        return node.kind in ('part', 'group', 'thread', 'message')     # unread, before the subject, as tuido's states
 
     def dim(self, node):
         return 0.8 if node.kind == 'folder' and not node.data['total'] else 1.0
@@ -507,7 +535,9 @@ class Mail(fc.Provider):
             tail.append((f'{d["unread"]} unread' if d['unread'] else f'{d["total"]} messages',
                          'repo_dirty_fg' if d['unread'] else 'repo_clean_fg',
                          'repo_dirty_bg' if d['unread'] else 'repo_clean_bg', False))
-        if node.kind in ('folder', 'group'):
+        if node.kind in ('folder', 'part', 'group'):
+            if self.split != 'none':
+                tail.append((f'{self.split} apart', 'bg', 'filter', False))
             tail.append((f'by {self.grouping}' if self.grouping != 'all' else 'not grouped', 'bg', 'filter', False))
         return segs, tail
 
@@ -543,8 +573,10 @@ class Mail(fc.Provider):
         return node.data if node is not None else None
 
     def actions(self, node):
-        if node.kind in ('folder', 'group'):          # how the folder branches: by date, sender, or not
-            out = [('\x0e', 'new', '⌃N new'), ('\x0c', 'group', f'⌃L by {self.next_grouping()}')]
+        if node.kind in ('folder', 'part', 'group'):  # how the folder branches: split, then by date, sender, or not
+            nxt = self.next_split()
+            out = [('\x0e', 'new', '⌃N new'), ('\x0c', 'group', f'⌃L by {self.next_grouping()}'),
+                   ('\x14', 'split', '⌃T not split' if nxt == 'none' else f'⌃T {nxt} apart')]
             return out
         if node.kind == 'attachment':
             return [('\x0f', 'open-one', '⌃O open'), ('\x13', 'save-one', '⌃S save'), ('\x12', 'reply', '⌃R reply')]
@@ -586,6 +618,12 @@ class Mail(fc.Provider):
             self.keep()
             self.invalidate()
             canvas.status('group', {'all': 'not grouped'}.get(self.grouping, f'grouped by {self.grouping}'), 'note')
+        elif name == 'split':
+            self.split = self.next_split()
+            self.keep()
+            self.invalidate()
+            canvas.status('group', {'none': 'not split', 'unread': 'unread apart', 'flagged': 'flagged apart'}[self.split],
+                          'note')
         elif name in ('open-one', 'save-one'):
             f = extract(node.data['message'])[node.data['index']]
             if name == 'open-one':
@@ -599,6 +637,10 @@ class Mail(fc.Provider):
             saved = [files.copy_to(f, files.downloads()) for f in extract(path)]
             canvas.say(f'saved {len(saved)} to {files.downloads()}' if saved else 'nothing attached')
         return None
+
+    def next_split(self):
+        ways = list(self.SPLITS)
+        return ways[(ways.index(self.split) + 1) % len(ways)]
 
     def next_grouping(self):
         return self.GROUPINGS[(self.GROUPINGS.index(self.grouping) + 1) % len(self.GROUPINGS)]

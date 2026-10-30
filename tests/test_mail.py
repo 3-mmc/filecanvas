@@ -258,12 +258,37 @@ class Provider(unittest.TestCase):
         self.screen(c)
         self.assertEqual([k.kind for k in c.focus.parent.load()][:2], ['thread', 'thread'])
 
+    def test_t_splits_unread_then_flagged_apart_a_thread_whole(self):
+        c = self.canvas('home/INBOX', grouping='all')
+        self.press(c, 'left', '\x14')                           # on the folder, ⌃T: unread apart
+        self.screen(c)
+        parts = c.focus.shown()
+        self.assertEqual([k.label() for k in parts], ['Unread', 'Read'])
+        self.assertEqual([[t.label() for t in k.load()] for k in parts], [['Kiln quote'], ['Your pass']])
+        self.assertEqual(c.source.mark(parts[0])[1], '●')
+        self.assertIn('unread apart', self.screen(c)[-2])
+        subprocess.run(['notmuch', 'tag', '+flagged', 'subject:"Your pass"'], check=True)
+        self.addCleanup(subprocess.run, ['notmuch', 'tag', '-flagged', 'subject:"Your pass"'])
+        self.press(c, '\x14')                                   # ⌃T: flagged apart
+        self.screen(c)
+        flagged, rest = c.focus.shown()
+        self.assertEqual((flagged.label(), rest.label(), c.source.mark(flagged)[1]), ('Flagged', 'The rest', '★'))
+        self.assertEqual([t.label() for t in flagged.load()], ['Your pass'])
+        subprocess.run(['notmuch', 'tag', '-flagged', 'subject:"Your pass"'], check=True)
+        c.source.invalidate()
+        self.screen(c)
+        self.assertEqual([k.label() for k in c.focus.shown()], ['The rest'])    # none now: just the rest
+        self.press(c, '\x14')                                   # ⌃T: not split
+        self.screen(c)
+        self.assertEqual([k.kind for k in c.focus.shown()], ['thread', 'thread'])
+
     def test_the_grouping_is_remembered(self):
         kept = os.path.join(TMP, 'view.json')
         p = mail.Mail(self.accounts, watch=0, remember=kept)
-        p.grouping = 'sender'
+        p.grouping, p.split = 'sender', 'flagged'
         p.keep()
-        self.assertEqual(mail.Mail(self.accounts, watch=0, remember=kept).grouping, 'sender')
+        again = mail.Mail(self.accounts, watch=0, remember=kept)
+        self.assertEqual((again.grouping, again.split), ('sender', 'flagged'))
 
     def test_enter_stays_and_an_empty_account_says_so(self):
         c = self.canvas('home/INBOX')

@@ -294,13 +294,22 @@ def profile_id(profile):
     return '/@' + profile
 
 
+def pinned_id(profile_path):
+    return f'{profile_path}{SEP}★pinned'
+
+
+def is_pinned(c):
+    """Pinned and not archived: an archived chat stays with the archived, at the end."""
+    return bool(c.get('pinned')) and not c.get('archived')
+
+
 def chat_id(profile, chat):
     return f'{profile_id(profile)}{SEP}{chat}'
 
 
 class Chat(fc.Provider):
     """nchat's profiles → chats → messages. `KINDS` are the node kinds it answers for."""
-    KINDS = ('profile', 'chat', 'run', 'chat-message', 'earlier')
+    KINDS = ('profile', 'pinned', 'chat', 'run', 'chat-message', 'earlier')
     pane = True
 
     def __init__(self, nchat='nchat', conf=None, log=None, read_receipts=True, typing=True, notify=True,
@@ -311,11 +320,17 @@ class Chat(fc.Provider):
         self.typed = {}         # (profile, chat): when your typing was last told
         self.told = {}          # chat: when a notification about it was last shown
         self.shown = {}         # (profile, chat): how many of its messages the canvas shows
-        self.serve = serve or Serve(lambda path: self.invalidate(path), nchat, conf, log)   # serve: tests' own
+        self.serve = serve or Serve(lambda path: self.changed_at(path), nchat, conf, log)   # serve: tests' own
         self.serve.on_event = self.on_event
 
     def root(self):
         return fc.Node('', 'chat', True, source=self, kind='root')
+
+    def changed_at(self, path):
+        """What's in the node `path` changed: a profile's chats are its pinned ones too."""
+        self.invalidate(path)
+        if path and path.startswith('/@') and SEP not in path:
+            self.invalidate(pinned_id(path))
 
     def loading(self):
         """(what's loading, whether it's done), for the opening screen: each profile connecting,
@@ -362,8 +377,16 @@ class Chat(fc.Provider):
                 s.request('get_chats', profile=p.id)
             if not chats:
                 raise OSError(0, 'connecting…' if p.connected is None else 'no chats yet')
-            return [fc.Node(chat_id(p.id, c['id']), p.chat_name(c['id']), True, node, 'chat',
-                            data=(p, c['id'])) for c in chats]
+            pinned = [c for c in chats if is_pinned(c)]      # a branch of their own, first
+            out = [fc.Node(pinned_id(node.path), 'Pinned', True, node, 'pinned', data=p)] if pinned else []
+            return out + [self.chat_node(node, p, c) for c in chats if not is_pinned(c)]
+        if node.kind == 'pinned':
+            with s.lock:
+                chats = sorted((c for c in p.chats.values() if is_pinned(c)),
+                               key=lambda c: -c.get('last_message_time', -1))
+            if not chats:
+                raise OSError(0, 'nothing pinned')
+            return [self.chat_node(node, p, c) for c in chats]
         if node.kind == 'chat':
             return self.conversation(node)
         if node.kind == 'run':
@@ -372,6 +395,12 @@ class Chat(fc.Provider):
             return [fc.Node(f'{node.parent.path}{SEP}{m["id"]}', self.message_label(p, m), False, node,
                             'chat-message', data=(p, chat, m)) for m in msgs]
         return []
+
+    def chat_node(self, parent, p, c):
+        return fc.Node(chat_id(p.id, c['id']), p.chat_name(c['id']), True, parent, 'chat', data=(p, c['id']))
+
+    def pinned_chats(self, node):
+        return [c for c in node.data.chats.values() if is_pinned(c)]
 
     def conversation(self, node):
         """A chat's latest messages, oldest at the top, in runs: who, then what they said in a row.
@@ -438,9 +467,24 @@ class Chat(fc.Provider):
         return node.kind == 'chat' and bool(self.chat(node).get('unread'))
 
     def colour(self, node):
+        if node.kind == 'pinned':
+            return ('dir', True) if any(c.get('unread') for c in self.pinned_chats(node)) else None
         return ('dir', True) if self.unread(node) else None
 
+    def count(self, node):
+        """How many chats are pinned: those with something unread, standing out."""
+        if node.kind != 'pinned':
+            return None
+        chats = self.pinned_chats(node)
+        unread = sum(1 for c in chats if c.get('unread'))
+        return (f'{unread}/{len(chats)}', 'git_dirty', True) if unread else (str(len(chats)), 'stub', False)
+
     def mark(self, node):
+        if node.kind == 'pinned':
+            chats = self.pinned_chats(node)
+            if any(c.get('unread_mention') for c in chats):
+                return 'git_conflict', '@', '@'
+            return ('git_dirty', '●', '*') if any(c.get('unread') for c in chats) else ('git_staged', '★', '!')
         if node.kind == 'chat':
             c = self.chat(node)
             if c.get('unread'):
@@ -673,7 +717,7 @@ class Chat(fc.Provider):
             for m in unread:
                 self.serve.request('mark_read', profile=p.id, chat=chat, message=m['id'])
         if unread or was:
-            self.invalidate(profile_id(p.id))
+            self.changed_at(profile_id(p.id))
 
     def on_event(self, kind, p, chat, what):
         """From the reader thread: what nchat said that the canvas should show moving."""
@@ -697,6 +741,8 @@ class Chat(fc.Provider):
             line = f'{p.who(last.get("sender"))}: {(last.get("text") or "📎").splitlines()[0] if last.get("text") else "📎"}'
             self.pulse(chat_id(p.id, chat))
             self.pulse(profile_id(p.id))
+            if is_pinned(p.chats.get(chat, {})):
+                self.pulse(pinned_id(profile_id(p.id)))
             self.status(f'new-{p.id}-{chat}', f'{name} · {line}' if name != p.who(last.get('sender')) else line, 'note')
             muted = p.chats.get(chat, {}).get('muted')
             if self.notify and not muted and time.time() - self.told.get(chat, 0) > 10:
