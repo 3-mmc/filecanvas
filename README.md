@@ -10,12 +10,13 @@ only reads: mbsync fetches (`Sync Pull`) and nothing changes on the server.
 
 ```
 sudo apt install isync notmuch python3-notmuch2 msmtp pass libsasl2-modules-kdexoauth2 neomutt
-python3 -m msgcanvas setup          # starts ~/.config/msgcanvas/accounts.toml: fill it in,
-python3 -m msgcanvas import-thunderbird   # or add the accounts Thunderbird has (not its passwords)
-python3 -m msgcanvas setup          # again: makes the mbsync, msmtp and notmuch configs from it
-python3 -m msgcanvas login NAME     # each account: a password into pass, or an OAuth sign-in
-python3 -m msgcanvas sync           # fetch and index
-python3 -m msgcanvas [NAME[/FOLDER]]
+ln -s "$PWD/msgcanvas-launcher" ~/.local/bin/msgcanvas    # once: `msgcanvas` anywhere
+msgcanvas setup          # starts ~/.config/msgcanvas/accounts.toml: fill it in,
+msgcanvas import-thunderbird   # or add the accounts Thunderbird has (not its passwords)
+msgcanvas setup          # again: makes the mbsync, msmtp and notmuch configs from it
+msgcanvas login NAME     # each account: a password into pass, or an OAuth sign-in
+msgcanvas sync           # fetch and index
+msgcanvas [NAME[/FOLDER]]
 ```
 
 The configs it makes live in `~/.config/msgcanvas/` and are handed to each tool, so your own
