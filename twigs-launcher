@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""twigs: this launcher runs the package next to it (twigs/), so it works from a symlink on your
+PATH; called as msgcanvas or calcanvas, it's that twig (`twigs install` makes those links)."""
+import os, sys
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from twigs.__main__ import main
+
+main()

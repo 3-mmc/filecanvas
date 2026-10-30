@@ -1,9 +1,0 @@
-#!/usr/bin/env python3
-"""calcanvas: this launcher runs the package next to it (calcanvas/), so it works from a symlink
-on your PATH: ln -s "$PWD/calcanvas-launcher" ~/.local/bin/calcanvas"""
-import os, sys
-
-sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from calcanvas.__main__ import main
-
-main()
