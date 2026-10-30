@@ -36,7 +36,7 @@ class Thunderbird(fc.Provider):
         self.worker.start()
 
     def root(self):
-        return fc.Node('/thunderbird', 'Thunderbird', True, source=self, kind='tb-root')
+        return fc.Node('/thunderbird', 'Emails', True, source=self, kind='tb-root')
 
     def request(self, node, offset=0, force=False):
         with self.lock:
@@ -187,6 +187,10 @@ class Thunderbird(fc.Provider):
             self.request(node, force=True)
             canvas.say('Refreshing from Thunderbird')
         return fc.STAY
+
+    def bar(self, node, plain):
+        segments, tail = super().bar(node, plain)
+        return segments, tail + [('via Thunderbird', 'seg_fg', 'seg_bg', False)]
 
     def count(self, node):
         if node.kind == 'tb-folder' and node.data.get('unreadMessages', 0) > 0:

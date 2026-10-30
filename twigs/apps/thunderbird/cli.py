@@ -19,7 +19,7 @@ from twigs.kit.text import plain
 def sections():
     from .canvas import Thunderbird
     config = settings.load()
-    return [('Thunderbird', Thunderbird(config))] if config and config['accounts'] else []
+    return [('Emails', Thunderbird(config))] if config and config['accounts'] else []
 
 
 def main(argv=None):

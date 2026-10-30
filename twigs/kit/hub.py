@@ -5,6 +5,15 @@ import os
 from twigs import core as fc
 
 
+def combine(sections):
+    from .together import Joined
+    grouped = {}
+    for name, provider in sections:
+        grouped.setdefault(name, []).append(provider)
+    return [(name, providers[0] if len(providers) == 1 else Joined(name, providers))
+            for name, providers in grouped.items()]
+
+
 def open(sections, start='', intro=True, **look):
     from . import together
     providers = [p for _, p in sections]
@@ -20,7 +29,8 @@ def open(sections, start='', intro=True, **look):
         loading = lambda: [p.loading() for p in providers]
         splash.intro(lambda: '  ·  '.join(text for text, _ in loading()), lambda: all(done for _, done in loading()))
     try:
-        return fc.pick(start, provider=providers[0] if len(providers) == 1 else together.Together(sections), **look)
+        joined = combine(sections)
+        return fc.pick(start, provider=joined[0][1] if len(joined) == 1 else together.Together(joined), **look)
     finally:
         for p in providers:
             if callable(getattr(p, 'close', None)):

@@ -30,7 +30,8 @@ twigs thunderbird connect
 twigs thunderbird
 ```
 
-The connected accounts also appear as a **Thunderbird** branch in the main Twigs canvas.
+The connected accounts also appear under **Emails** alongside manually configured accounts, with a small “via Thunderbird”
+note in the status bar when selected.
 Use **Ctrl+F** within a folder to search; submit an empty query to clear it. Searches use the
 extension's header/preview matching, including `from:`, `subject:`, `to:` and `cc:` operators.
 Use **Ctrl+R** to request current data from Thunderbird. A “More messages” entry fetches the next

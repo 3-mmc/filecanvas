@@ -19,7 +19,14 @@ class Together(fc.Provider):
     def owner(self, node):
         """The provider a node belongs to: the one that made it (a section is its provider's)."""
         src = node.source
-        return src if src is not self and any(src is p for p in self.providers) else None
+        if src is not self and any(src is p for p in self.providers):
+            return src
+        for p in self.providers:
+            if isinstance(p, Together):
+                owner = p.owner(node)
+                if owner:
+                    return owner
+        return None
 
     def root(self):
         return fc.Node('', 'twigs', True, source=self, kind='root')
@@ -128,3 +135,38 @@ class Together(fc.Provider):
 
     def choose(self, node):
         return self.ask('choose', node, None)
+
+
+class Joined(Together):
+    """One section's children supplied by several providers, with their own paths and hooks."""
+    def __init__(self, name, providers):
+        super().__init__([(name, p) for p in providers])
+        self.name = name
+        for p in self.providers:
+            original_root = p.root().path
+            def invalidate(path=None, deep=False, root=original_root):
+                self.invalidate(self.root().path if path == root else path,
+                                deep=True if path == root else deep)
+            p.invalidate = invalidate
+            # Resolve our hooks when called: an outer Together may redirect them later.
+            p.signal = lambda what: self.signal(what)
+
+    def root(self):
+        return fc.Node('§'+self.name, self.name, True, source=self, kind='joined-root')
+
+    def children(self, node):
+        if node.source is not self:
+            return node.source.children(node)
+        out = []
+        for p in self.providers:
+            for child in p.children(p.root()):
+                child.parent = node
+                out.append(child)
+        return out
+
+    def locate(self, start):
+        if not self.providers:
+            return [], ''
+        ids, typed = self.providers[0].locate(start)
+        original = self.providers[0].root().path
+        return [i for i in ids if i != original], typed
