@@ -296,6 +296,18 @@ class ChipLines(unittest.TestCase):
         self.assertTrue(plain[3].endswith('hello'))
         self.assertLessEqual(fc.cells(plain[4]), 100)
 
+
+class People(unittest.TestCase):
+    def test_every_theme_has_six_readable_colours_for_people(self):
+        def lum(c):
+            r = [x / 255 for x in fc.rgb(c)]
+            r = [x / 12.92 if x <= 0.03928 else ((x + 0.055) / 1.055) ** 2.4 for x in r]
+            return 0.2126 * r[0] + 0.7152 * r[1] + 0.0722 * r[2]
+        for name, t in fc.THEMES.items():
+            for i in range(fc.PEOPLE):
+                a, b = sorted((lum(t['person_fg']), lum(t[f'person{i}'])), reverse=True)
+                self.assertGreaterEqual((a + 0.05) / (b + 0.05), 4.5, f'{name} person{i}')
+
 class Wrap(unittest.TestCase):
     def test_breaks_at_spaces_and_cuts_long_words(self):
         self.assertEqual(fc.wrap('the quick brown fox', 10), ['the quick', 'brown fox'])
