@@ -295,7 +295,7 @@ class Mail(fc.Provider):
         if node.kind == 'folder':
             return f'{d["total"]:,} messages, {d["unread"]:,} unread'
         if node.kind == 'thread' and d['count'] == 1:
-            return read(d['messages'][0]['path'])
+            return [read(d['messages'][0]['path'])] + pictures(d['messages'][0]['path'])
         if node.kind == 'thread':
             lines = [f'{d["count"]} messages, {d["authors"]}', '']
 
@@ -306,7 +306,7 @@ class Mail(fc.Provider):
             walk(d['messages'], 0)
             return '\n'.join(lines)
         if node.kind == 'message':
-            return read(d['path'])
+            return [read(d['path'])] + pictures(d['path'])
         if node.kind == 'drafts':
             return f'{d["count"]} not sent yet: ⌃E goes on writing one, ⌃D throws it away'
         if node.kind == 'draft':
@@ -432,6 +432,19 @@ def attachments(path):
     except OSError:
         return []
     return [a.get_filename() or a.get_content_type().replace('/', '.') for a in msg.iter_attachments()]
+
+
+def pictures(path):
+    """The images attached to the message in `path`, for the pane: fc.Pictures of cached files."""
+    try:
+        with open(path, 'rb') as f:
+            msg = email.message_from_binary_file(f, policy=email.policy.default)
+    except OSError:
+        return []
+    if not any(a.get_content_maintype() == 'image' for a in msg.iter_attachments()):
+        return []
+    kinds = [a.get_content_maintype() for a in msg.iter_attachments()]
+    return [fc.Picture(f) for f, kind in zip(extract(path), kinds) if kind == 'image']
 
 
 def extract(path):

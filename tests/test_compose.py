@@ -199,5 +199,45 @@ class OnTheCanvas(unittest.TestCase):
         self.assertEqual(os.listdir(os.path.join(tm.TMP, 'dl')), ['form.pdf'])
 
 
+class Pictures(unittest.TestCase):
+    PNG = (b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00'
+           b'\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0\x00\x00\x03\x01\x01\x00\xc9\xfe\x92\xef'
+           b'\x00\x00\x00\x00IEND\xaeB`\x82')
+
+    def test_a_mails_images_follow_its_text(self):
+        m = email.message.EmailMessage()
+        m['From'], m['To'], m['Subject'] = 'Ann <ann@x.org>', 'aaron@example.org', 'photos'
+        m.set_content('two pictures and a pdf')
+        m.add_attachment(self.PNG, maintype='image', subtype='png', filename='kiln.png')
+        m.add_attachment(b'%PDF', maintype='application', subtype='pdf', filename='a.pdf')
+        path = os.path.join(tm.TMP, 'photos.eml')
+        with open(path, 'wb') as f:
+            f.write(m.as_bytes())
+        p = mail.Mail([account()], watch=0)
+        node = fc.Node('/x', 'photos', False, None, 'message', source=p, data=dict(path=path))
+        shown = p.preview(node)
+        self.assertIn('two pictures', shown[0])
+        self.assertEqual([x.name for x in shown[1:]], ['kiln.png'])
+        with open(shown[1].path, 'rb') as f:
+            self.assertEqual(f.read(), self.PNG)
+
+    def test_a_photo_message_fetches_its_picture_then_shows_it(self):
+        from msgcanvas import chat
+        asked = []
+        c = chat.Chat.__new__(chat.Chat)
+        c.serve = type('S', (), {'lock': __import__('threading').Lock(),
+                                 'request': lambda self, op, **f: asked.append((op, f['message']))})()
+        prof = chat.Profile({'profile': 'WhatsAppMd_1', 'protocol': 'WhatsAppMd'})
+        m = {'id': 'm1', 'sender': 'ann', 'text': '', 'time': 1000,
+             'file': {'path': '', 'status': 0, 'id': 'f', 'type': 'image/jpeg'}}
+        self.assertEqual(c.picture(prof, 'ann', m), ['(fetching the picture…)'])
+        c.picture(prof, 'ann', m)
+        self.assertEqual(asked, [('download_file', 'm1')])                  # asked once
+        png = os.path.join(tm.TMP, 'got.png')
+        with open(png, 'wb') as f:
+            f.write(self.PNG)
+        m['file'].update(path=png, status=1)
+        self.assertEqual([x.path for x in c.picture(prof, 'ann', m)], [png])
+
 if __name__ == '__main__':
     unittest.main()

@@ -85,6 +85,15 @@ class Events(unittest.TestCase):
         self.assertEqual(p.typing['ann'], set())
         self.assertEqual(s.apply({'event': 'chats', 'profile': 'nobody', 'chats': []}), [])
 
+    def test_people_without_names_read_as_numbers(self):
+        s, p = self.serve()
+        s.apply({'event': 'chats', 'profile': p.id, 'chats': [
+            {'id': '491701234567@s.whatsapp.net', 'name': '491701234567@s.whatsapp.net'},
+            {'id': '1203630-16@g.us', 'name': '1203630-16@g.us'}]})
+        self.assertEqual(p.chat_name('491701234567@s.whatsapp.net'), '+491701234567')
+        self.assertEqual(p.chat_name('1203630-16@g.us'), 'group')
+        self.assertEqual(p.who('Stanley_0'), 'Stanley_0')
+
     def test_a_skipped_profile_is_kept(self):
         s, _ = self.serve()
         self.assertEqual(s.skipped, [{'profile': 'Signal_+492', 'why': 'locked'}])

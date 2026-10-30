@@ -45,16 +45,28 @@ class Profile:
         self.needs_setup = False
         self.unsent = {}            # chat: why the last message to it wasn't sent
         self.wanted = {}            # (chat, message): what to do with its file once it's downloaded
+        self.fetching = set()       # (chat, message): pictures asked for, to show
 
     def who(self, user):
         if user == self.self_id or user == 'You':
             return 'You'
-        return self.contacts.get(user, {}).get('name') or user
+        return self.contacts.get(user, {}).get('name') or plain(user)
 
     def chat_name(self, chat):
         c = self.chats.get(chat, {})
         name = c.get('name') or chat
         return self.who(chat) if name == chat else name   # named by its id: a contact's name, once known
+
+
+def plain(user):
+    """Someone nchat has no name for, as a person would write them: WhatsApp's 4917…@s.whatsapp.net
+    is +4917…, an unnamed group just 'group'."""
+    local, at, server = (user or '').partition('@')
+    if at and server == 'g.us':
+        return 'group'
+    if at and local.isdigit():
+        return '+' + local
+    return user or '(unknown)'
 
 
 class Serve:
@@ -367,8 +379,23 @@ class Chat(fc.Provider):
         if node.kind == 'chat-message':
             p, chat, m = node.data
             t = time.strftime('%Y-%m-%d %H:%M', time.localtime(m['time'] / 1000)) if m.get('time', -1) > 0 else ''
-            return f'{p.who(m.get("sender"))} · {t}\n\n{self.body(p, m)}'
+            return [f'{p.who(m.get("sender"))} · {t}\n\n{self.body(p, m)}'] + self.picture(p, chat, m)
         return None
+
+    def picture(self, p, chat, m):
+        """A photo message's picture, for the pane; looking at one not fetched yet fetches it."""
+        f = m.get('file') or {}
+        if not (f.get('type') or '').startswith('image/'):
+            return []
+        if f.get('status') == 1 and f.get('path') and os.path.exists(f['path']):
+            return [fc.Picture(f['path'])]
+        if f.get('status') in (0, 3):
+            with self.serve.lock:
+                ask = (chat, m['id']) not in p.fetching
+                p.fetching.add((chat, m['id']))
+            if ask:
+                self.serve.request('download_file', profile=p.id, chat=chat, message=m['id'])
+        return ['(fetching the picture…)' if f.get('status') != 3 else '(the picture couldn\'t be fetched)']
 
     def body(self, p, m):
         """A message as text: what it quotes, what it says, its file and reactions."""
