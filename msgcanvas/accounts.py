@@ -53,7 +53,9 @@ TEMPLATE = '''# msgcanvas's mail accounts. After editing: `msgcanvas setup` make
 # the address), patterns (mbsync's folder patterns). `msgcanvas import-thunderbird` adds yours.
 #
 # Chats come from nchat (`msgcanvas chat-setup` adds a WhatsApp, Signal or Instagram account).
-# [chat] can say: nchat = "path/to/nchat", confdir = "nchat's folder", enabled = false.
+# [chat] can say: nchat = "path/to/nchat", confdir = "nchat's folder", enabled = false, and
+# read_receipts / typing / notify = false (telling people you've read or are typing; desktop
+# notifications). [defaults] notify = false stops mail's notifications.
 
 [defaults]
 real_name = "{real_name}"
@@ -139,7 +141,9 @@ def load(path=ACCOUNTS):
 
 def chat_settings(path=ACCOUNTS):
     """accounts.toml's [chat]: `nchat` (the program), `confdir` (nchat's own folder, its default
-    if not given), `enabled` (true unless false)."""
+    if not given), and, each true unless false: `enabled`, `read_receipts` (telling people you've
+    read what they sent, once you go into the chat), `typing` (telling them you're typing),
+    `notify` (desktop notifications)."""
     try:
         with open(path, 'rb') as f:
             c = tomllib.load(f).get('chat', {})
@@ -147,7 +151,8 @@ def chat_settings(path=ACCOUNTS):
         c = {}
     return dict(nchat=os.path.expanduser(c.get('nchat', 'nchat')),
                 confdir=os.path.expanduser(c['confdir']) if c.get('confdir') else None,
-                enabled=c.get('enabled', True))
+                enabled=c.get('enabled', True), read_receipts=c.get('read_receipts', True),
+                typing=c.get('typing', True), notify=c.get('notify', True))
 
 
 def quoted(text):

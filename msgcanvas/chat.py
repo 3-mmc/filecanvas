@@ -14,6 +14,7 @@ from .mail import SEP, when
 PROTOCOLS = {'WhatsAppMd': 'WhatsApp', 'Signal': 'Signal', 'Instagram': 'Instagram',
              'Telegram': 'Telegram', 'Dummy': 'Dummy'}
 HISTORY = 50          # messages fetched when a chat is first looked at
+TYPING = 12           # seconds someone is typing after the last word that they are
 
 
 def confdir():
@@ -41,6 +42,7 @@ class Profile:
         self.asked = set()          # chats whose history was asked for
         self.asked_chats = False    # the chat list, likewise
         self.typing = {}            # chat: {user}
+        self.typed = {}             # (chat, user): when they were last said to be typing, or to stop
         self.connected = None       # None until nchat says
         self.needs_setup = False
         self.unsent = {}            # chat: why the last message to it wasn't sent
@@ -49,9 +51,14 @@ class Profile:
         self.colours = {}           # chat: {sender: n}, person n's colour, in the order they first wrote
 
     def who(self, user):
+        """A person's name: from contacts, else their own chat's (a one-to-one chat has their id),
+        else as a person would write them."""
         if user == self.self_id or user == 'You':
             return 'You'
-        return self.contacts.get(user, {}).get('name') or plain(user)
+        named = self.contacts.get(user, {}).get('name')
+        if not named and user in self.chats and self.chats[user].get('name') not in (None, '', user):
+            named = self.chats[user]['name']
+        return named or plain(user)
 
     def colour(self, chat, sender):
         """Which of the theme's colours for people `sender` has in `chat`: the next free one when
@@ -83,10 +90,7 @@ class Serve:
     is called (from that thread) with the id of each canvas node whose contents changed."""
 
     def __init__(self, on_change, nchat='nchat', conf=None, log=None):
-        self.on_change, self.lock = on_change, threading.Lock()
-        self.profiles, self.skipped, self.error, self.next_id = {}, [], None, 0
-        self.ready = threading.Event()
-        self.then = []              # what an event set off, to do once the lock is let go
+        self.state(on_change)
         cmd = [nchat, '--serve'] + (['-d', conf] if conf else [])
         err = open(log, 'a') if log else subprocess.DEVNULL     # nchat's fatal start-up errors
         try:
@@ -100,6 +104,27 @@ class Serve:
             if log:
                 err.close()      # the child has its own
         threading.Thread(target=self.read, daemon=True).start()
+
+    def state(self, on_change):
+        self.on_change, self.lock = on_change, threading.Lock()
+        self.profiles, self.skipped, self.error, self.next_id = {}, [], None, 0
+        self.ready = threading.Event()
+        self.then = []              # what an event set off, to do once the lock is let go
+        self.on_event = None        # on_event(kind, profile, chat, what): arrived, sent, typing
+        self.started = time.time() * 1000
+        self.proc = None
+
+    @classmethod
+    def detached(cls, on_change=lambda path: None):
+        """One with no nchat behind it: its state, for feeding events by hand (tests)."""
+        s = cls.__new__(cls)
+        s.state(on_change)
+        return s
+
+    def tell(self, kind, p, chat, what):
+        """on_event(...), once the lock is let go: it may ask nchat things."""
+        if self.on_event:
+            self.then.append(lambda: self.on_event(kind, p, chat, what))
 
     def request(self, op, **fields):
         if not self.proc or self.error:
@@ -187,6 +212,13 @@ class Serve:
                 p.unsent[chat] = 'not sent'
         if kind in ('messages', 'sent'):
             got = e.get('messages', ()) if kind == 'messages' else [e['message']] if e.get('message') else []
+            # new to you: not seen, not yours, and come since msgcanvas started (not history)
+            fresh = [m for m in got if kind == 'messages' and m.get('id') and m['id'] not in msgs and
+                     not m.get('outgoing') and m.get('time', 0) >= self.started - 60000]
+            if fresh:
+                self.tell('arrived', p, chat, fresh)
+            if kind == 'sent':
+                self.tell('sent', p, chat, e)
             for m in got:
                 if m.get('id'):
                     msgs[m['id']] = m
@@ -217,6 +249,8 @@ class Serve:
         if kind == 'typing':
             who = p.typing.setdefault(chat, set())
             (who.add if e.get('typing') else who.discard)(e.get('user'))
+            p.typed[(chat, e.get('user'))] = time.time()
+            self.tell('typing', p, chat, (e.get('user'), bool(e.get('typing'))))
             return [node]
         if kind in ('pinned', 'muted', 'archived') and e.get('ok', True) and chat in p.chats:
             if 'message' in e and e['message'] in msgs:
@@ -240,8 +274,15 @@ class Chat(fc.Provider):
     KINDS = ('profile', 'chat', 'chat-message')
     pane = True
 
-    def __init__(self, nchat='nchat', conf=None, log=None):
-        self.serve = Serve(lambda path: self.invalidate(path), nchat, conf, log)
+    def __init__(self, nchat='nchat', conf=None, log=None, read_receipts=True, typing=True, notify=True,
+                 serve=None):
+        self.read_receipts, self.send_typing, self.notify = read_receipts, typing, notify
+        self.sending = {}       # request id: (status key, profile, chat, who to, timer)
+        self.looking = None     # (profile, chat) you're in, or None
+        self.typed = {}         # (profile, chat): when your typing was last told
+        self.told = {}          # chat: when a notification about it was last shown
+        self.serve = serve or Serve(lambda path: self.invalidate(path), nchat, conf, log)   # serve: tests' own
+        self.serve.on_event = self.on_event
 
     def root(self):
         return fc.Node('', 'chat', True, source=self, kind='root')
@@ -349,9 +390,6 @@ class Chat(fc.Provider):
         tail = []
         if node.kind in ('chat', 'chat-message'):
             p, chat = node.data[:2]
-            typing = [p.who(u) for u in p.typing.get(chat, ())]
-            if typing:
-                tail.append((', '.join(typing) + ' typing…', 'repo_clean_fg', 'repo_clean_bg', False))
             if chat in p.unsent:
                 tail.append(('⚠ ' + p.unsent[chat], 'repo_dirty_fg', 'repo_dirty_bg', False))
         return segs, tail
@@ -423,6 +461,12 @@ class Chat(fc.Provider):
             out.append('(deleted)')
         elif m.get('text'):
             out.append(m['text'] + (' (edited)' if m.get('edited') else ''))
+        if m.get('outgoing') and not m.get('deleted'):      # ✓ there, ✓✓ read
+            tick = ' ✓✓' if m.get('read') else ' ✓'
+            if out:
+                out[-1] += tick
+            else:
+                out.append(tick.strip())
         f = m.get('file')
         if f:
             state = {0: 'not downloaded', 1: f.get('path', ''), 2: 'downloading', 3: 'download failed'}
@@ -451,10 +495,10 @@ class Chat(fc.Provider):
         m = node.data[2] if node.kind == 'chat-message' else None
         to = p.chat_name(chat)
         if name == 'write':
-            canvas.ask(f'to {to}', lambda text: self.send(canvas, p, chat, text))
+            canvas.ask(f'to {to}', lambda text: self.send(canvas, p, chat, text), changed=self.typing_in(p, chat))
         elif name == 'reply':
             canvas.ask(f'reply to {p.who(m.get("sender"))}',
-                       lambda text: self.send(canvas, p, chat, text, quoted=m['id']))
+                       lambda text: self.send(canvas, p, chat, text, quoted=m['id']), changed=self.typing_in(p, chat))
         elif name == 'attach':
             def choose():
                 path = self.pick(files.downloads())
@@ -488,8 +532,104 @@ class Chat(fc.Provider):
             fields['quoted'] = quoted
         if file:
             fields['file'] = file
-        if self.serve.request('send_message', **fields) is None:
-            canvas.say('not sent: ' + (self.serve.error or 'nchat is not running'))
-        else:
-            canvas.say('sending…')
+        n = self.serve.request('send_message', **fields)
+        if n is None:
+            canvas.status('send', 'not sent: ' + (self.serve.error or 'nchat is not running'), 'failed')
+            return None
+        to = p.chat_name(chat)
+        key = f'send-{n}'
+        timer = threading.Timer(30, self.no_answer, args=(n,))
+        timer.daemon = True
+        self.sending[n] = (key, p, chat, to, timer)
+        timer.start()
+        self.status(key, f'to {to}', 'busy')
         return None
+
+    def no_answer(self, n):
+        sent = self.sending.pop(n, None)
+        if sent:
+            self.status(sent[0], f'no answer sending to {sent[3]}', 'failed')
+
+    def typing_in(self, p, chat):
+        """For the typing line: tell the chat you're typing while there's text, and when you stop."""
+        def changed(text):
+            if not self.send_typing:
+                return
+            last = self.typed.get((p.id, chat))
+            if text and (last is None or time.time() - last > 8):       # again now and then, as apps do
+                self.typed[(p.id, chat)] = time.time()
+                self.serve.request('send_typing', profile=p.id, chat=chat, typing=True)
+            elif not text and last is not None:
+                del self.typed[(p.id, chat)]
+                self.serve.request('send_typing', profile=p.id, chat=chat, typing=False)
+        return changed
+
+    # -- where you are, and what arrives
+    def focus(self, node):
+        if node.kind in ('chat', 'chat-message'):
+            p, chat = node.data[:2]
+            self.looking = (p.id, chat)
+            if node.kind == 'chat-message':     # in it, not passing by: it's read
+                self.mark_read(p, chat)
+        elif node.kind != 'chat-message':
+            self.looking = None
+
+    def mark_read(self, p, chat):
+        with self.serve.lock:
+            unread = [m for m in p.messages.get(chat, {}).values() if not m.get('outgoing') and not m.get('read')]
+            was = p.chats.get(chat, {}).get('unread')
+            for m in unread:
+                m['read'] = True
+            if chat in p.chats:
+                p.chats[chat]['unread'] = False
+        if self.read_receipts:
+            for m in unread:
+                self.serve.request('mark_read', profile=p.id, chat=chat, message=m['id'])
+        if unread or was:
+            self.invalidate(profile_id(p.id))
+
+    def on_event(self, kind, p, chat, what):
+        """From the reader thread: what nchat said that the canvas should show moving."""
+        name = p.chat_name(chat)
+        if kind == 'sent':
+            e = what
+            mine = [n for n, s in self.sending.items() if (n == e.get('request')) or
+                    ('request' not in e and s[2] == chat)]
+            if not mine:
+                return
+            key, _, _, to, timer = self.sending.pop(min(mine))
+            timer.cancel()
+            self.status(key, f'sent to {to}' if e.get('ok', True) else f'not sent to {to}',
+                        'ok' if e.get('ok', True) else 'failed')
+        elif kind == 'arrived':
+            if self.looking == (p.id, chat):
+                return                          # you're reading it: the pane shows it come in
+            last = what[-1]
+            line = f'{p.who(last.get("sender"))}: {(last.get("text") or "📎").splitlines()[0] if last.get("text") else "📎"}'
+            self.pulse(chat_id(p.id, chat))
+            self.pulse(profile_id(p.id))
+            self.status(f'new-{p.id}-{chat}', f'{name} · {line}' if name != p.who(last.get('sender')) else line, 'note')
+            muted = p.chats.get(chat, {}).get('muted')
+            if self.notify and not muted and time.time() - self.told.get(chat, 0) > 10:
+                self.told[chat] = time.time()
+                files.notify(name, line if len(what) == 1 else f'{line}  (+{len(what) - 1} more)')
+        elif kind == 'typing':
+            user, on = what
+            if user == p.self_id:
+                return
+            key = f'typing-{p.id}-{chat}'
+            where = '' if self.looking == (p.id, chat) else f' in {name}'
+            self.status(key, f'{p.who(user)} typing{where}', 'busy' if on else 'gone')
+            if on:              # protocols that don't say when it stops: it stops by itself
+                t = threading.Timer(TYPING, self.stop_typing, args=(p, chat, user, p.typed[(chat, user)], key))
+                t.daemon = True
+                t.start()
+
+    def stop_typing(self, p, chat, user, since, key):
+        """Typing nobody has said more about for TYPING seconds has stopped."""
+        with self.serve.lock:
+            if p.typed.get((chat, user)) != since:
+                return                          # said again since: that one's timer will see to it
+            p.typing.get(chat, set()).discard(user)
+        self.status(key, f'{p.who(user)} typing', 'gone')
+        self.invalidate(chat_id(p.id, chat))

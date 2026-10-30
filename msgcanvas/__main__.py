@@ -115,10 +115,12 @@ def browse(start):
     if os.path.exists(accounts.NOTMUCH):
         found = configured()
         if found:
-            providers.append(mail.Mail(found))
+            defaults = accounts.load()[0]
+            providers.append(mail.Mail(found, notify=defaults.get('notify', True)))
     c = accounts.chat_settings()
     if c['enabled'] and shutil.which(c['nchat']) and chat.has_profiles(c['confdir'] or chat.confdir()):
-        providers.append(chat.Chat(c['nchat'], c['confdir'], state('nchat-serve.log')))
+        providers.append(chat.Chat(c['nchat'], c['confdir'], state('nchat-serve.log'), read_receipts=c['read_receipts'],
+                                   typing=c['typing'], notify=c['notify']))
     if not providers:
         sys.exit('msgcanvas: nothing to show yet: `msgcanvas setup` for mail, `msgcanvas chat-setup` for chats')
     try:

@@ -143,8 +143,8 @@ class Mail(fc.Provider):
     KINDS = ('account', 'folder', 'thread', 'message', 'drafts', 'draft')
     pane = True
 
-    def __init__(self, accounts, watch=2.0, pick=None):
-        self.accounts = accounts
+    def __init__(self, accounts, watch=2.0, pick=None, notify=True):
+        self.accounts, self.notify = accounts, notify
         self.pick = pick or (lambda start: fc.pick(start, glyphs='plain'))   # a file, to attach
         self._seen = None
         if watch:
@@ -162,7 +162,34 @@ class Mail(fc.Provider):
                 continue
             if self._seen is not None and rev != self._seen:
                 self.invalidate()
+                if rev[1] == self._seen[1]:         # the same database: what came since
+                    self.arrived(self._seen[0], rev[0])
             self._seen = rev
+
+    def arrived(self, before, now):
+        """New unread mail in an inbox, since revision `before`: the account and folder pulse, a
+        note says what came, and (with notify) a desktop notification, one for all of it."""
+        try:
+            with database() as db:
+                root = str(db.path)
+                q = f'lastmod:{before + 1}..{now} and tag:unread and tag:inbox and date:3d..'
+                new = [(str(m.path), who(header(m, 'From')), header(m, 'Subject'))
+                       for m in db.messages(q, sort=notmuch2.Database.SORT.NEWEST_FIRST)]
+        except notmuch2.NotmuchError:
+            return
+        if not new:
+            return
+        mine = {a.name for a in self.accounts}
+        for path, _, _ in new:
+            rel = os.path.relpath(path, root).split(os.sep)
+            if rel[0] in mine and len(rel) > 2:          # account / folder… / cur|new / file
+                self.pulse('/' + rel[0])
+                self.pulse(f'/{rel[0]}/{os.path.join(*rel[1:-2])}')
+        _, sender, subject = new[0]
+        line = f'{sender}: {subject or "(no subject)"}'
+        self.status('mail-new', line if len(new) == 1 else f'{len(new)} new mails · {line}', 'note')
+        if self.notify:
+            files.notify('New mail' if len(new) == 1 else f'{len(new)} new mails', line)
 
     # -- the tree
     def root(self):

@@ -49,9 +49,7 @@ def until(test, seconds=10):
 class Events(unittest.TestCase):
     """Serve.apply, with no nchat: what each event does to what's kept."""
     def serve(self):
-        s = chat.Serve.__new__(chat.Serve)
-        s.profiles, s.skipped = {}, []
-        s.ready = __import__('threading').Event()
+        s = chat.Serve.detached()
         s.apply({'event': 'hello', 'profiles': [{'profile': 'WhatsAppMd_+491', 'protocol': 'WhatsAppMd',
                                                  'self': 'me', 'features': []}],
                  'skipped': [{'profile': 'Signal_+492', 'why': 'locked'}]})
@@ -106,6 +104,113 @@ class Events(unittest.TestCase):
     def test_a_skipped_profile_is_kept(self):
         s, _ = self.serve()
         self.assertEqual(s.skipped, [{'profile': 'Signal_+492', 'why': 'locked'}])
+
+
+class Behaviour(unittest.TestCase):
+    """What the provider does with what nchat says: sending, arrivals, typing, reading."""
+    def setUp(self):
+        self.asked, self.notified = [], []
+        s = chat.Serve.detached()
+        s.request = lambda op, **f: self.asked.append((op, f)) or len(self.asked)
+        self.real_notify = chat.files.notify
+        chat.files.notify = lambda title, body: self.notified.append((title, body))
+        self.addCleanup(setattr, chat.files, 'notify', self.real_notify)
+        self.c = chat.Chat(serve=s)
+        self.signals = []
+        self.c.signal = self.signals.append
+        s.apply({'event': 'hello', 'profiles': [{'profile': 'W_1', 'protocol': 'WhatsAppMd', 'self': 'me',
+                                                 'features': ['send_acknowledgement']}]})
+        s.apply({'event': 'chats', 'profile': 'W_1', 'chats': [{'id': 'ann', 'name': 'Ann'}, {'id': 'bo', 'name': 'Bo'}]})
+        self.p, self.s = s.profiles['W_1'], s
+
+    def feed(self, e):
+        with self.s.lock:
+            self.s.apply(dict(e, profile='W_1'))
+            then, self.s.then = self.s.then, []
+        for fn in then:
+            fn()
+
+    def statuses(self):
+        return [(w[2], w[3]) for w in self.signals if w[0] == 'status']
+
+    def test_sending_spins_then_ticks_or_fails(self):
+        canvas = fc.Canvas('', options(fc.Tree({})))
+        self.c.send(canvas, self.p, 'ann', 'hi')
+        self.assertEqual(self.asked[-1], ('send_message', {'profile': 'W_1', 'chat': 'ann', 'text': 'hi'}))
+        self.assertEqual(self.statuses(), [('to Ann', 'busy')])
+        self.feed({'event': 'sent', 'chat': 'ann', 'ok': True, 'request': len(self.asked)})
+        self.assertEqual(self.statuses()[-1], ('sent to Ann', 'ok'))
+        self.c.send(canvas, self.p, 'ann', 'again')
+        self.feed({'event': 'sent', 'chat': 'ann', 'ok': False, 'request': len(self.asked)})
+        self.assertEqual(self.statuses()[-1], ('not sent to Ann', 'failed'))
+        self.c.send(canvas, self.p, 'bo', 'hello?')
+        self.c.no_answer(len(self.asked))
+        self.assertEqual(self.statuses()[-1], ('no answer sending to Bo', 'failed'))
+        for _, _, _, _, timer in self.c.sending.values():
+            timer.cancel()
+
+    def test_an_arrival_elsewhere_pulses_notes_and_notifies(self):
+        now = time.time() * 1000
+        self.feed({'event': 'messages', 'chat': 'ann', 'messages': [{'id': 'm1', 'sender': 'ann', 'text': 'hello', 'time': now}]})
+        self.assertIn(('pulse', '/@W_1\x1fann'), self.signals)
+        self.assertIn(('Ann: hello', 'note'), self.statuses())
+        self.assertEqual(self.notified, [('Ann', 'Ann: hello')])
+        self.feed({'event': 'messages', 'chat': 'ann', 'messages': [{'id': 'm2', 'sender': 'ann', 'text': 'more', 'time': now}]})
+        self.assertEqual(len(self.notified), 1)                         # not again within 10 s
+        self.feed({'event': 'messages', 'chat': 'bo', 'messages': [{'id': 'old', 'sender': 'bo', 'text': 'x', 'time': 1000}]})
+        self.assertEqual(len(self.notified), 1)                         # history isn't news
+        self.p.chats['bo']['muted'] = True
+        self.feed({'event': 'messages', 'chat': 'bo', 'messages': [{'id': 'b1', 'sender': 'bo', 'text': 'x', 'time': now}]})
+        self.assertEqual(len(self.notified), 1)                         # muted: no notification
+        self.c.looking = ('W_1', 'ann')
+        n = len(self.signals)
+        self.feed({'event': 'messages', 'chat': 'ann', 'messages': [{'id': 'm3', 'sender': 'ann', 'text': 'here', 'time': now}]})
+        self.assertEqual(len(self.signals), n)                          # you're reading it
+
+    def test_typing_comes_and_goes(self):
+        self.feed({'event': 'typing', 'chat': 'ann', 'user': 'ann', 'typing': True})
+        self.assertEqual(self.statuses()[-1], ('Ann typing in Ann', 'busy'))
+        since = self.p.typed[('ann', 'ann')]
+        self.feed({'event': 'typing', 'chat': 'ann', 'user': 'ann', 'typing': True})
+        self.c.stop_typing(self.p, 'ann', 'ann', since, 'k')            # an older timer: not the last word
+        self.assertEqual(self.p.typing['ann'], {'ann'})
+        self.c.stop_typing(self.p, 'ann', 'ann', self.p.typed[('ann', 'ann')], 'k')
+        self.assertEqual((self.p.typing['ann'], self.statuses()[-1][1]), (set(), 'gone'))
+        self.feed({'event': 'typing', 'chat': 'ann', 'user': 'me', 'typing': True})
+        self.assertNotIn('You', ' '.join(t for t, _ in self.statuses()))  # your own typing isn't news
+
+    def test_going_into_a_chat_reads_it(self):
+        now = time.time() * 1000
+        self.feed({'event': 'messages', 'chat': 'ann', 'messages': [
+            {'id': 'a', 'sender': 'ann', 'text': '1', 'time': now, 'read': False},
+            {'id': 'b', 'sender': 'me', 'text': '2', 'time': now, 'outgoing': True, 'read': False}]})
+        self.p.chats['ann']['unread'] = True
+        node = lambda kind: fc.Node('x', 'x', False, None, kind, source=self.c,
+                                    data=(self.p, 'ann') if kind == 'chat' else (self.p, 'ann', {}))
+        self.c.focus(node('chat'))                                      # passing by: not read
+        self.assertFalse([a for a in self.asked if a[0] == 'mark_read'])
+        self.c.focus(node('chat-message'))
+        self.assertEqual([a[1]['message'] for a in self.asked if a[0] == 'mark_read'], ['a'])
+        self.assertFalse(self.p.chats['ann']['unread'])
+        self.c.read_receipts = False
+        self.p.messages['ann']['c'] = {'id': 'c', 'sender': 'ann', 'read': False}
+        self.c.focus(node('chat-message'))
+        self.assertEqual(len([a for a in self.asked if a[0] == 'mark_read']), 1)   # read here, not told
+        self.assertTrue(self.p.messages['ann']['c']['read'])
+
+    def test_your_typing_is_told_and_stopped(self):
+        changed = self.c.typing_in(self.p, 'ann')
+        for text in ('h', 'hi', None):
+            changed(text)
+        self.assertEqual([a[1]['typing'] for a in self.asked if a[0] == 'send_typing'], [True, False])
+        self.c.send_typing = False
+        changed('x')
+        self.assertEqual(len([a for a in self.asked if a[0] == 'send_typing']), 2)
+
+    def test_your_messages_show_whether_they_were_read(self):
+        self.assertEqual(self.c.body(self.p, {'text': 'hi', 'outgoing': True}), 'hi ✓')
+        self.assertEqual(self.c.body(self.p, {'text': 'hi', 'outgoing': True, 'read': True}), 'hi ✓✓')
+        self.assertEqual(self.c.body(self.p, {'text': 'hi'}), 'hi')
 
 
 @unittest.skipUnless(NCHAT, 'nchat not installed')

@@ -214,6 +214,29 @@ class Provider(unittest.TestCase):
         self.assertEqual(c.focus.parent.shown()[0].label(), 'Fresh')
         self.assertEqual(c.focus.label(), 'Your pass')          # where you were
 
+    def test_new_mail_is_told(self):
+        import email.utils
+        from msgcanvas import files
+        told, signals = [], []
+        real = files.notify
+        files.notify = lambda title, body: told.append((title, body))
+        self.addCleanup(setattr, files, 'notify', real)
+        p = mail.Mail(self.accounts, watch=0)
+        p.signal = signals.append
+        with mail.database() as db:
+            before = db.revision().rev
+        now = email.utils.formatdate(localtime=True)
+        deliver('home/INBOX', 'm9', letter('n9@x', 'Cy <cy@x.org>', 'Glaze test', now, 'new'))
+        deliver('home/INBOX', 'm10', letter('n10@x', 'Di <di@x.org>', 'Seen already', now, 'old'), seen=True)
+        subprocess.run(['notmuch', 'new', '--quiet'], check=True)
+        with mail.database() as db:
+            p.arrived(before, db.revision().rev)
+        self.assertEqual(told, [('New mail', 'Cy: Glaze test')])          # the unread one, not the seen
+        self.assertIn(('pulse', '/home'), signals)
+        self.assertIn(('pulse', '/home/INBOX'), signals)
+        self.assertIn(('status', 'mail-new', 'Cy: Glaze test', 'note'), signals)
+        os.remove(os.path.join(MAILDIR, 'home', 'INBOX', 'cur', 'm10:2,S'))
+
     def tearDown(self):
         fresh = os.path.join(MAILDIR, 'home', 'INBOX', 'new', 'm9')
         if os.path.exists(fresh):

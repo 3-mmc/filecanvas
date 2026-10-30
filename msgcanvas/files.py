@@ -74,3 +74,39 @@ def copy_to(path, folder):
     target = unique(os.path.join(folder, safe_name(os.path.basename(path))))
     shutil.copy2(path, target)
     return target
+
+
+# Windows' toast, through PowerShell's own app id (a toast needs a registered app to come from).
+# The words come in through the environment, never through the script, so nothing in a message
+# can change what runs.
+TOAST = r'''
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
+$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+$x = $t.GetElementsByTagName('text')
+$x.Item(0).AppendChild($t.CreateTextNode($env:MSGCANVAS_TITLE)) > $null
+$x.Item(1).AppendChild($t.CreateTextNode($env:MSGCANVAS_BODY)) > $null
+$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show([Windows.UI.Notifications.ToastNotification]::new($t))
+'''
+
+
+def notifier(title, body):
+    """The command that shows a desktop notification, and its environment; None if there's no way."""
+    env = dict(os.environ, MSGCANVAS_TITLE=title[:120], MSGCANVAS_BODY=body[:240])
+    if wsl() and shutil.which('powershell.exe'):
+        return ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', TOAST], env
+    if sys.platform == 'darwin':
+        script = 'display notification (system attribute "MSGCANVAS_BODY") with title (system attribute "MSGCANVAS_TITLE")'
+        return ['osascript', '-e', script], env
+    if shutil.which('notify-send'):
+        return ['notify-send', '--app-name=msgcanvas', title[:120], body[:240]], env
+    return None
+
+
+def notify(title, body):
+    """A desktop notification (Windows' under WSL), without waiting for it."""
+    how = notifier(title, body)
+    if how:
+        cmd, env = how
+        subprocess.Popen(cmd, env=env, cwd='/mnt/c' if wsl() else None, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)

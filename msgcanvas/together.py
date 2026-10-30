@@ -10,7 +10,8 @@ class Together(fc.Provider):
     def __init__(self, providers):
         self.providers = providers
         for p in providers:
-            p.invalidate = self.invalidate      # theirs is ours: the canvas asks only us
+            p.invalidate = self.invalidate      # theirs is ours: the canvas asks only us,
+            p.signal = self.signal              # for what changed and for what moves (pulse, status)
 
     def owner(self, node):
         return next((p for p in self.providers if node.kind in p.KINDS), None)
