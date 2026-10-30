@@ -1,4 +1,4 @@
-# Vendored from calcanvas (github.com/3-mmc/calcanvas) at 876ff79: do not edit here.
+# Vendored from calcanvas (github.com/3-mmc/calcanvas) at 4490614: do not edit here.
 # Change it there and run tools/vendor-calcanvas.py.
 """Calendars you subscribe to by their address: an .ics feed. Google Calendar gives one for each
 of yours (Settings → the calendar → Integrate calendar → "Secret address in iCal format") and for
@@ -13,6 +13,7 @@ Last-Modified), so fetching often costs little. Feeds are read-only: nothing goe
     name = "aaron@gmail.com"        # what the canvas calls it
     url = "https://calendar.google.com/calendar/ical/…/basic.ics"
     every = 15                      # minutes between fetches while the canvas is open (15)
+    quiet = true                    # in the background: after your own things, fainter (holidays)
 """
 import json, os, re, tomllib, urllib.error, urllib.parse, urllib.request
 
@@ -26,13 +27,18 @@ TIMEOUT = 30
 
 
 class Feed:
-    def __init__(self, name, url, key=None, every=EVERY):
-        self.name, self.url, self.every = name, url, every
+    def __init__(self, name, url, key=None, every=EVERY, quiet=False):
+        self.name, self.url, self.every, self.quiet = name, url, every, quiet
         self.key = key or slug(name)
 
     def where(self):
         """The address without its secret: just the server (it's safe to show)."""
         return urllib.parse.urlsplit(address(self.url)).netloc
+
+
+def public(url):
+    """A public calendar's address (Google's holidays, the moon): one for the background."""
+    return '/public/' in address(url)
 
 
 def slug(name):
@@ -55,7 +61,7 @@ def load(path=FEEDS):
     for i, f in enumerate(got):
         if not f.get('url') or not f.get('name'):
             raise SystemExit(f'calcanvas: {path}: feed {i + 1} needs a name and a url')
-        feed = Feed(f['name'], f['url'], f.get('key'), int(f.get('every', EVERY)))
+        feed = Feed(f['name'], f['url'], f.get('key'), int(f.get('every', EVERY)), bool(f.get('quiet', False)))
         while feed.key in keys:
             feed.key += '-2'
         keys.add(feed.key)
@@ -72,7 +78,8 @@ def save(feeds, path=FEEDS):
     for f in feeds:
         out.append(f'[[feed]]\nname = {q(f.name)}\nurl = {q(f.url)}\n'
                    + (f'key = {q(f.key)}\n' if f.key != slug(f.name) else '')
-                   + (f'every = {f.every}\n' if f.every != EVERY else ''))
+                   + (f'every = {f.every}\n' if f.every != EVERY else '')
+                   + ('quiet = true\n' if f.quiet else ''))
     tmp = path + '.new'
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, 'w') as fh:
