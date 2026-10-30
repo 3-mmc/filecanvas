@@ -850,6 +850,16 @@ class Glow(unittest.TestCase):
         self.assertNotEqual(row(lines, 'lastweek'), row(bare, 'lastweek'))
         self.assertEqual(row(lines, 'old'), row(bare, 'old'))          # long ago: as it was
         self.assertTrue(0 < due <= 600 - 60 + 1)                       # woken by fresh's step down at 10 min, or sooner
+        for sub in ('one', 'two'):                                     # fresh folders, each with a file
+            os.makedirs(os.path.join(d, sub))
+            open(os.path.join(d, sub, sub + '.txt'), 'w').close()
+        g = fc.Canvas(os.path.join(d, 'one', 'one.txt'),
+                      options(color='truecolor', ls_colors=False, git=False, grey_rest=True))
+        g.wall = lambda: time.time()
+        lines, _ = g.frame(100, 20, animate=True)
+        rest = row(lines, 'two')                                       # a branch you're not on: grey, glow or not
+        r, gr, b = (int(x) for x in rest.rsplit('m', 1)[0].split(';')[-3:])
+        self.assertTrue(r == gr == b, rest)
         fc.FileSystem(recent=False)                                    # off (--no-recent): no glow at all
         c = fc.Canvas(d, options(color='truecolor', ls_colors=False, git=False, start=d, recent=False))
         press(c, 'right')

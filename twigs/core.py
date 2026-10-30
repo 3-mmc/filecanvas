@@ -1437,7 +1437,8 @@ class Canvas:
                     c, bold = self.colour(n)
                     if o.grey_rest and n.parent is not self.focus.parent and n.parent is not self.focus:
                         c, bold = 'rest', False   # a branch you're not on
-                    changed = None if isinstance(n, Stub) else self.source.glow(n)
+                    greyed = c == 'rest'
+                    changed = None if isinstance(n, Stub) or greyed else self.source.glow(n)   # grey wins
                     if changed is not None:     # changed lately: towards the glow, by how lately
                         lit, until = glowing(wall - changed)
                         if lit:
