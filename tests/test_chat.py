@@ -97,9 +97,10 @@ class Events(unittest.TestCase):
         order = ['ann', 'me', 'bo', 'ann', 'cy', 'bo']
         self.assertEqual([p.colour('grp', who) for who in order], [0, 1, 1, 0, 2, 1])
         self.assertEqual(p.colour('other', 'cy'), 0)                      # per chat
-        chip = chat.Chat.name_chip(None, 'Bo', ' 5 Oct', 7)
-        self.assertEqual(chip.segs, [('Bo', 'person_fg', 'person1', True)])
-        self.assertEqual(chat.Chat.name_chip(None, 'You', '', 0).segs[0][1:3], ('home_fg', 'home_bg'))
+        c = chat.Chat(serve=s)
+        run = lambda who: fc.Node('r', who, True, None, 'run', source=c, data=(p, 'grp', [], who))
+        self.assertEqual(c.chip(run('bo')), ('person_fg', 'person1'))
+        self.assertEqual(c.chip(run('me')), ('home_fg', 'home_bg'))
 
     def test_a_skipped_profile_is_kept(self):
         s, _ = self.serve()
@@ -165,7 +166,7 @@ class Behaviour(unittest.TestCase):
         self.c.looking = ('W_1', 'ann')
         n = len(self.signals)
         self.feed({'event': 'messages', 'chat': 'ann', 'messages': [{'id': 'm3', 'sender': 'ann', 'text': 'here', 'time': now}]})
-        self.assertEqual(len(self.signals), n)                          # you're reading it
+        self.assertEqual(self.signals[n:], [('pulse', '/@W_1\x1fann\x1fm3')])   # you're in it: it flashes in, no more
 
     def test_typing_comes_and_goes(self):
         self.feed({'event': 'typing', 'chat': 'ann', 'user': 'ann', 'typing': True})
@@ -207,16 +208,13 @@ class Behaviour(unittest.TestCase):
         changed('x')
         self.assertEqual(len([a for a in self.asked if a[0] == 'send_typing']), 2)
 
-    def test_each_message_says_who_when_and_whether_it_was_read(self):
+    def test_each_message_says_what_then_when_and_whether_it_was_read(self):
         at = time.mktime((2026, 10, 30, 14, 32, 0, 0, 0, -1))
         mine = {'id': 'x', 'sender': 'me', 'text': 'hi', 'outgoing': True, 'time': at * 1000}
-        head = self.c.head(self.p, 'ann', mine)
-        self.assertEqual((head.segs[0][0], head.after), ('You', ' 14:32 · ' + chat.stamp(at)[8:] + '  ✓'))
+        self.assertEqual(self.c.message_label(self.p, mine), 'hi  14:32 ✓')
         mine['read'] = True
-        self.assertTrue(self.c.head(self.p, 'ann', mine).after.endswith('  ✓✓'))
-        theirs = dict(mine, sender='ann', outgoing=False)
-        self.assertNotIn('✓', self.c.head(self.p, 'ann', theirs).after)
-        self.assertEqual(self.c.body(self.p, mine), 'hi')                  # the ticks are on the head line
+        self.assertEqual(self.c.message_label(self.p, mine), 'hi  14:32 ✓✓')
+        self.assertEqual(self.c.message_label(self.p, dict(mine, sender='ann', outgoing=False)), 'hi  14:32')
         now = time.mktime((2026, 10, 30, 18, 0, 0, 0, 0, -1))
         self.assertEqual(chat.stamp(at, now), '14:32 · today')
         self.assertEqual(chat.stamp(at - 86400, now), '14:32 · yesterday')
@@ -247,17 +245,23 @@ class Live(unittest.TestCase):
         def chats():
             screen(c)                               # a frame takes in what nchat has said
             return [k for k in profile.load() if k.kind == 'chat']
-        press(c, 'right')                           # asks for the chats; they come as events
+        press(c, 'right')                           # asks for the chats; they come as events…
         self.assertTrue(until(lambda: len(chats()) > 1))
-        press(c, 'right')
-        self.assertEqual(c.focus.kind, 'chat')
+        self.assertEqual(c.focus.kind, 'chat')      # …and once they're here, it's gone into them
         self.assertTrue(until(lambda: any(k.label() != k.data[1] for k in chats())))    # contacts' names
         times = [p.chat(k).get('last_message_time', -1) for k in chats()]
         self.assertEqual(times, sorted(times, reverse=True))                         # the latest first
-        self.assertTrue(until(lambda: '(fetching…)' not in '\n'.join(screen(c))))     # its history came
+        the_chat = c.focus
+        self.assertTrue(until(lambda: screen(c) and the_chat.data[1] in p.serve.profiles['Dummy_1'].asked))
+        press(c, 'right')                           # its history was asked for on the way past
+        self.assertTrue(until(lambda: screen(c) and c.focus.kind == 'run'))
+        self.assertEqual((c.focus.kind, c.focus is the_chat.shown()[-1]), ('run', True))          # the latest
+        self.assertEqual(the_chat.shown()[0].kind, 'earlier')
         press(c, 'right')
         self.assertEqual(c.focus.kind, 'chat-message')
-        self.assertIn(': ', c.focus.label())
+        self.assertRegex(c.focus.label(), r'  \d\d:\d\d')                    # what it says, then when
+        self.assertFalse(p.pane_for(c.focus))                                 # no pane: it's on the canvas,
+        self.assertIn(c.focus.label().split('  ')[0][:20], ''.join(screen(c)[:-2]))   # drawn there in full
 
     def test_beside_mail_and_a_locked_profile(self):
         conf = dummy_conf('b')

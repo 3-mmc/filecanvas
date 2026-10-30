@@ -14,6 +14,9 @@ from .mail import SEP
 PROTOCOLS = {'WhatsAppMd': 'WhatsApp', 'Signal': 'Signal', 'Instagram': 'Instagram',
              'Telegram': 'Telegram', 'Dummy': 'Dummy'}
 HISTORY = 50          # messages fetched when a chat is first looked at
+SHOWN = 20            # messages a chat shows on the canvas, the latest; ↑ earlier shows more
+MORE = 20             # and how many more each time
+MESSAGE_WIDTH = 46    # columns a message wraps to
 TYPING = 12           # seconds someone is typing after the last word that they are
 
 
@@ -288,7 +291,7 @@ def chat_id(profile, chat):
 
 class Chat(fc.Provider):
     """nchat's profiles → chats → messages. `KINDS` are the node kinds it answers for."""
-    KINDS = ('profile', 'chat', 'chat-message')
+    KINDS = ('profile', 'chat', 'run', 'chat-message', 'earlier')
     pane = True
 
     def __init__(self, nchat='nchat', conf=None, log=None, read_receipts=True, typing=True, notify=True,
@@ -298,6 +301,7 @@ class Chat(fc.Provider):
         self.looking = None     # (profile, chat) you're in, or None
         self.typed = {}         # (profile, chat): when your typing was last told
         self.told = {}          # chat: when a notification about it was last shown
+        self.shown = {}         # (profile, chat): how many of its messages the canvas shows
         self.serve = serve or Serve(lambda path: self.invalidate(path), nchat, conf, log)   # serve: tests' own
         self.serve.on_event = self.on_event
 
@@ -352,11 +356,49 @@ class Chat(fc.Provider):
             return [fc.Node(chat_id(p.id, c['id']), p.chat_name(c['id']), True, node, 'chat',
                             data=(p, c['id'])) for c in chats]
         if node.kind == 'chat':
-            p, chat = node.data
-            msgs = self.history(p, chat)
-            return [fc.Node(f'{node.path}{SEP}{m["id"]}', self.line(p, m), False, node, 'chat-message',
-                            data=(p, chat, m)) for m in reversed(msgs)]
+            return self.conversation(node)
+        if node.kind == 'run':
+            p, chat, msgs, _ = node.data
+            # a message's id doesn't depend on its run, so it's found again when runs regroup
+            return [fc.Node(f'{node.parent.path}{SEP}{m["id"]}', self.message_label(p, m), False, node,
+                            'chat-message', data=(p, chat, m)) for m in msgs]
         return []
+
+    def conversation(self, node):
+        """A chat's latest messages, oldest at the top, in runs: who, then what they said in a row.
+        Above them, '↑ earlier' shows more."""
+        p, chat = node.data
+        msgs = self.history(p, chat)
+        shown = self.shown.get((p.id, chat), SHOWN)
+        older = max(0, len(msgs) - shown)
+        out = [fc.Node(f'{node.path}{SEP}earlier', f'↑ {older} earlier' if older else '↑ earlier', False, node,
+                       'earlier', data=(p, chat))] if msgs else []
+        runs, day = [], None
+        for m in msgs[older:]:
+            sender = m.get('sender')
+            if runs and runs[-1][0] == sender:
+                runs[-1][1].append(m)
+            else:
+                runs.append((sender, [m]))
+        for sender, run in runs:
+            when = stamp(run[0]['time'] / 1000).split(' · ')[1] if run[0].get('time', -1) > 0 else ''
+            name = p.who(sender) + (f'  {when}' if when != day else '')    # the day, when it changes
+            day = when
+            r = fc.Node(f'{node.path}{SEP}run{SEP}{run[0]["id"]}', name, True, node, 'run',
+                        data=(p, chat, run, sender))
+            r.open = True                       # a conversation shows what everyone said, not just one
+            out.append(r)
+        if not msgs:
+            raise OSError(0, 'fetching…' if chat in p.asked else 'no messages')
+        return out
+
+    def message_label(self, p, m):
+        """A message as it's drawn on the canvas: what it says (quote, text, file, reactions),
+        then its time and, if it's yours, ✓ or ✓✓."""
+        end = time.strftime('%H:%M', time.localtime(m['time'] / 1000)) if m.get('time', -1) > 0 else ''
+        if m.get('outgoing') and not m.get('deleted'):
+            end += ' ' + ticks(m)
+        return self.body(p, m) + ('  ' + end if end else '')
 
     def history(self, p, chat):
         """The chat's messages, oldest first; the first look asks nchat for the latest."""
@@ -367,11 +409,6 @@ class Chat(fc.Provider):
         if ask:
             self.serve.request('get_messages', profile=p.id, chat=chat, **{'from': ''}, limit=HISTORY)
         return msgs
-
-    def line(self, p, m):
-        text = (m.get('text') or '').split('\n')[0] or ('📎 ' + (m['file'] or {}).get('type', 'file')
-                                                         if m.get('file') else '')
-        return f'{p.who(m.get("sender"))}: {text}'
 
     def locate(self, start):
         return [], ''
@@ -413,26 +450,45 @@ class Chat(fc.Provider):
             return 0.7 if c.get('archived') else 0.85 if c.get('muted') else 1.0
         return 1.0
 
+    def width(self, node):
+        return MESSAGE_WIDTH if node.kind == 'chat-message' else None
+
+    def chip(self, node):
+        """A run's name: you in the bar's first chip's colours, everyone else in their own."""
+        if node.kind != 'run':
+            return None
+        p, chat, _, sender = node.data
+        if p.who(sender) == 'You':
+            return 'home_fg', 'home_bg'
+        return 'person_fg', f'person{p.colour(chat, sender) % fc.PEOPLE}'
+
+    def start_at(self, node):
+        return -1 if node.kind in ('chat', 'run') else 0       # the latest, and keep to it
+
+    def pane_for(self, node):
+        """Chats are on the canvas itself: the pane only shows a photo."""
+        if node.kind == 'chat-message':
+            return ((node.data[2].get('file') or {}).get('type') or '').startswith('image/')
+        return node.kind not in self.KINDS
+
     def bar(self, node, plain):
         names, n = [], node
         while n.parent:
-            names.append(n.data[0].who(n.data[2].get('sender')) if n.kind == 'chat-message' else self.label(n))
+            names.append(fc.clip((n.data[2].get('text') or '📎').split('\n')[0], 30)
+                         if n.kind == 'chat-message' else self.label(n).split('  ')[0])
             n = n.parent
         names.reverse()
         segs = [('chat', 'home_fg', 'home_bg', False)] + [
             (t, 'cwd_fg' if i == len(names) - 1 else 'seg_fg', 'seg_bg', i == len(names) - 1)
             for i, t in enumerate(names)]
         tail = []
-        if node.kind in ('chat', 'chat-message'):
+        if node.kind in ('chat', 'run', 'chat-message', 'earlier'):
             p, chat = node.data[:2]
             if chat in p.unsent:
                 tail.append(('⚠ ' + p.unsent[chat], 'repo_dirty_fg', 'repo_dirty_bg', False))
         return segs, tail
 
-    # -- the reading pane
-    def preview_end(self, node):
-        return node.kind == 'chat'
-
+    # -- the reading pane: a photo's picture
     def preview(self, node):
         if node.kind == 'profile':
             p = node.data
@@ -441,36 +497,10 @@ class Chat(fc.Provider):
                     '\n\nnchat is open on it: close nchat, then open this again.' if p['skipped'] == 'locked' else '')
             state = {None: 'connecting…', True: 'connected', False: 'not connected'}[p.connected]
             return f'{p.protocol} {p.name}\n{state}\n\n{len(p.chats)} chats'
-        if node.kind == 'chat':
-            p, chat = node.data
-            msgs = self.history(p, chat)
-            if not msgs:
-                return '(fetching…)' if chat in p.asked else '(no messages)'
-            out = []
-            for m in msgs:                      # each: who (a chip of the bar's), when, ✓ / ✓✓; what
-                out += ([''] if out else []) + [self.head(p, chat, m)]
-                out.append('\n'.join('  ' + l for l in self.body(p, m).split('\n')))
-            typing = [p.who(u) for u in p.typing.get(chat, ())]
-            if typing:
-                out += ['', ', '.join(typing) + ' typing…']
-            return out
         if node.kind == 'chat-message':
             p, chat, m = node.data
-            return [self.head(p, chat, m), '', self.body(p, m)] + self.picture(p, chat, m)
+            return self.picture(p, chat, m) or None
         return None
-
-    def head(self, p, chat, m):
-        """A message's first line: who wrote it, then its time and day, then (yours) ✓ or ✓✓."""
-        after = f' {stamp(m["time"] / 1000)}' if m.get('time', -1) > 0 else ''
-        if m.get('outgoing') and not m.get('deleted'):
-            after += '  ' + ticks(m)
-        return self.name_chip(p.who(m.get('sender')), after, p.colour(chat, m.get('sender')))
-
-    def name_chip(self, who, after, n):
-        """Who wrote, as a chip like the bar's: you in its first chip's colours, everyone else in
-        their own (the theme's person0 … person5, `n`)."""
-        colours = ('home_fg', 'home_bg') if who == 'You' else ('person_fg', f'person{n % fc.PEOPLE}')
-        return fc.Chips([(who, *colours, True)], after)
 
     def picture(self, p, chat, m):
         """A photo message's picture, for the pane; looking at one not fetched yet fetches it."""
@@ -507,11 +537,21 @@ class Chat(fc.Provider):
         return '\n'.join(out) or '(empty)'
 
     def choose(self, node):
+        """Enter on '↑ earlier': show more, fetching them first if they aren't here yet."""
+        if node.kind == 'earlier':
+            p, chat = node.data
+            key = (p.id, chat)
+            have = len(p.messages.get(chat, {}))
+            self.shown[key] = self.shown.get(key, SHOWN) + MORE
+            if self.shown[key] > have and have:
+                oldest = min(p.messages[chat].values(), key=lambda m: m.get('time', -1))
+                self.serve.request('get_messages', profile=p.id, chat=chat, **{'from': oldest['id']}, limit=MORE)
+            self.invalidate(chat_id(p.id, chat))
         return None
 
     # -- writing, and files
     def actions(self, node):
-        if node.kind not in ('chat', 'chat-message'):
+        if node.kind not in ('chat', 'run', 'chat-message', 'earlier'):
             return []
         out = [('\x0e', 'write', '⌃N write'), ('\x01', 'attach', '⌃A send a file')]
         if node.kind == 'chat-message':
@@ -596,12 +636,14 @@ class Chat(fc.Provider):
 
     # -- where you are, and what arrives
     def focus(self, node):
-        if node.kind in ('chat', 'chat-message'):
+        if node.kind in ('chat', 'run', 'chat-message', 'earlier'):
             p, chat = node.data[:2]
             self.looking = (p.id, chat)
-            if node.kind == 'chat-message':     # in it, not passing by: it's read
+            if node.kind == 'chat':
+                self.history(p, chat)           # ask for it now: it's there by the time you go in
+            if node.kind != 'chat':             # in it, not passing by: it's read
                 self.mark_read(p, chat)
-        elif node.kind != 'chat-message':
+        else:
             self.looking = None
 
     def mark_read(self, p, chat):
@@ -632,8 +674,10 @@ class Chat(fc.Provider):
             self.status(key, f'sent to {to}' if e.get('ok', True) else f'not sent to {to}',
                         'ok' if e.get('ok', True) else 'failed')
         elif kind == 'arrived':
-            if self.looking == (p.id, chat):
-                return                          # you're reading it: the pane shows it come in
+            if self.looking == (p.id, chat):    # you're in it: what came in flashes as it appears
+                for m in what:
+                    self.pulse(f'{chat_id(p.id, chat)}{SEP}{m["id"]}')
+                return
             last = what[-1]
             line = f'{p.who(last.get("sender"))}: {(last.get("text") or "📎").splitlines()[0] if last.get("text") else "📎"}'
             self.pulse(chat_id(p.id, chat))

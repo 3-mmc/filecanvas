@@ -59,6 +59,18 @@ class Together(fc.Provider):
             return node.data
         return self.ask('preview', node, None)
 
+    def width(self, node):
+        return self.ask('width', node, None)
+
+    def chip(self, node):
+        return self.ask('chip', node, None)
+
+    def start_at(self, node):
+        return self.ask('start_at', node, 0)
+
+    def pane_for(self, node):
+        return self.ask('pane_for', node, True)
+
     def preview_end(self, node):
         return self.ask('preview_end', node, False)
 
