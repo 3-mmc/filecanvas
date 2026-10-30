@@ -4,6 +4,8 @@ profile (skipped where nchat isn't installed: NCHAT names another one).
     python3 -m unittest discover tests"""
 import atexit, os, re, shutil, tempfile, time, unittest
 
+import tests                                    # the private test home, before msgcanvas
+
 from msgcanvas import chat, filecanvas as fc, together
 
 NCHAT = os.environ.get('NCHAT') or shutil.which('nchat')

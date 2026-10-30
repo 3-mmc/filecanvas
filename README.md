@@ -64,6 +64,6 @@ scroll the pane, Esc to leave.
 
 ## Tests
 
-`python3 -m unittest discover tests` builds a small maildir, indexes it with notmuch, and drives
+`python3 -m unittest` (from the repo) builds a small maildir, indexes it with notmuch, and drives
 the canvas over it; the chat tests run the real `nchat --serve` on a Dummy profile (skipped
 without nchat, `NCHAT=path` for another build).

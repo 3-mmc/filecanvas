@@ -1,13 +1,14 @@
 """Chats on the canvas: nchat's profiles (WhatsApp, Signal, Instagram, …), their chats (pinned,
 then the latest first), and each chat's messages; the reading pane shows the conversation, newest
-at the bottom.
+at the bottom. ⌃N writes in a chat, ⌃R replies to a message, ⌃A sends a file, ⌃O / ⌃S open or
+save a message's file (fetching it first).
 
 nchat runs as a child, `nchat --serve`, speaking JSON lines (nchat's doc/serve.md): requests go
 in, replies and events come out. Everything it says is kept here, by profile, chat and message
-id, and the canvas is invalidated where it changed. Nothing is sent or marked read yet."""
+id, and the canvas is invalidated where it changed. Nothing is marked read yet."""
 import json, os, subprocess, threading, time
 
-from . import filecanvas as fc
+from . import files, filecanvas as fc
 from .mail import SEP, when
 
 PROTOCOLS = {'WhatsAppMd': 'WhatsApp', 'Signal': 'Signal', 'Instagram': 'Instagram',
@@ -42,6 +43,8 @@ class Profile:
         self.typing = {}            # chat: {user}
         self.connected = None       # None until nchat says
         self.needs_setup = False
+        self.unsent = {}            # chat: why the last message to it wasn't sent
+        self.wanted = {}            # (chat, message): what to do with its file once it's downloaded
 
     def who(self, user):
         if user == self.self_id or user == 'You':
@@ -62,6 +65,7 @@ class Serve:
         self.on_change, self.lock = on_change, threading.Lock()
         self.profiles, self.skipped, self.error, self.next_id = {}, [], None, 0
         self.ready = threading.Event()
+        self.then = []              # what an event set off, to do once the lock is let go
         cmd = [nchat, '--serve'] + (['-d', conf] if conf else [])
         err = open(log, 'a') if log else subprocess.DEVNULL     # nchat's fatal start-up errors
         try:
@@ -111,8 +115,14 @@ class Serve:
             if 'event' in e:
                 with self.lock:
                     changed = self.apply(e)
+                    then, self.then = self.then, []
                 for path in changed:
                     self.on_change(path)
+                for fn in then:
+                    try:
+                        fn()
+                    except Exception:
+                        pass
             # replies: `ok` only means nchat took the request; what came of it arrives as events
         code = self.proc.wait()
         self.error = self.error or f'nchat stopped (exit {code})'
@@ -149,6 +159,11 @@ class Serve:
         chat = e.get('chat')
         node = chat_id(p.id, chat)
         msgs = p.messages.setdefault(chat, {}) if chat is not None else {}
+        if kind == 'sent':
+            if e.get('ok', True):
+                p.unsent.pop(chat, None)
+            else:
+                p.unsent[chat] = 'not sent'
         if kind in ('messages', 'sent'):
             got = e.get('messages', ()) if kind == 'messages' else [e['message']] if e.get('message') else []
             for m in got:
@@ -162,7 +177,12 @@ class Serve:
             msgs[e['message']]['read'] = e.get('read', True)
             return [node]
         if kind == 'message_file' and e.get('message') in msgs:
-            msgs[e['message']]['file'] = e.get('file')
+            f = msgs[e['message']]['file'] = e.get('file')
+            want = p.wanted.get((chat, e['message']))
+            if want and f and f.get('status') in (1, 3):
+                del p.wanted[(chat, e['message'])]
+                if f.get('status') == 1 and f.get('path'):
+                    self.then.append(lambda: want(f['path']))
             return [node]
         if kind == 'reactions' and e.get('message') in msgs:
             msgs[e['message']]['reactions'] = e.get('reactions')
@@ -311,6 +331,8 @@ class Chat(fc.Provider):
             typing = [p.who(u) for u in p.typing.get(chat, ())]
             if typing:
                 tail.append((', '.join(typing) + ' typing…', 'repo_clean_fg', 'repo_clean_bg', False))
+            if chat in p.unsent:
+                tail.append(('⚠ ' + p.unsent[chat], 'repo_dirty_fg', 'repo_dirty_bg', False))
         return segs, tail
 
     # -- the reading pane
@@ -368,4 +390,63 @@ class Chat(fc.Provider):
         return '\n'.join(out) or '(empty)'
 
     def choose(self, node):
+        return None
+
+    # -- writing, and files
+    def actions(self, node):
+        if node.kind not in ('chat', 'chat-message'):
+            return []
+        out = [('\x0e', 'write', '⌃N write'), ('\x01', 'attach', '⌃A send a file')]
+        if node.kind == 'chat-message':
+            out.insert(1, ('\x12', 'reply', '⌃R reply'))
+            if node.data[2].get('file'):
+                out += [('\x0f', 'open', '⌃O open file'), ('\x13', 'save', '⌃S save file')]
+        return out
+
+    def act(self, node, name, canvas):
+        p, chat = node.data[:2]
+        m = node.data[2] if node.kind == 'chat-message' else None
+        to = p.chat_name(chat)
+        if name == 'write':
+            canvas.ask(f'to {to}', lambda text: self.send(canvas, p, chat, text))
+        elif name == 'reply':
+            canvas.ask(f'reply to {p.who(m.get("sender"))}',
+                       lambda text: self.send(canvas, p, chat, text, quoted=m['id']))
+        elif name == 'attach':
+            def choose():
+                path = self.pick(files.downloads())
+                if path:
+                    canvas.ask(f'{os.path.basename(path)} to {to}, saying (or nothing)',
+                               lambda text: self.send(canvas, p, chat, text, file=path, empty_ok=True))
+            canvas.outside(choose)
+        elif name in ('open', 'save'):
+            use = (lambda path: files.open_file(path)) if name == 'open' else \
+                  (lambda path: files.copy_to(path, files.downloads()))
+            f = m.get('file') or {}
+            if f.get('status') == 1 and f.get('path') and os.path.exists(f['path']):
+                use(f['path'])
+                canvas.say('opening' if name == 'open' else f'saved to {files.downloads()}')
+            else:
+                with self.serve.lock:
+                    p.wanted[(chat, m['id'])] = use
+                self.serve.request('download_file', profile=p.id, chat=chat, message=m['id'])
+                canvas.say('fetching it: it ' + ('opens' if name == 'open' else 'is saved') + ' when it\'s here')
+        return None
+
+    def pick(self, start):
+        return fc.pick(start, glyphs='plain')
+
+    def send(self, canvas, p, chat, text, quoted=None, file=None, empty_ok=False):
+        if not text.strip() and not empty_ok:
+            canvas.say('nothing to send')
+            return None
+        fields = dict(profile=p.id, chat=chat, text=text)
+        if quoted:
+            fields['quoted'] = quoted
+        if file:
+            fields['file'] = file
+        if self.serve.request('send_message', **fields) is None:
+            canvas.say('not sent: ' + (self.serve.error or 'nchat is not running'))
+        else:
+            canvas.say('sending…')
         return None

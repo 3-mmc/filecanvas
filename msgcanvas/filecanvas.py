@@ -1,4 +1,4 @@
-# Vendored from filecanvas (github.com/3-mmc/filecanvas) at 8df5b34: do not edit here.
+# Vendored from filecanvas (github.com/3-mmc/filecanvas) at cd3bd22: do not edit here.
 # Change it there and run tools/vendor-filecanvas.py; msgcanvas's own choices are in its providers.
 """filecanvas: the file system as one canvas you move across.
 
@@ -456,6 +456,18 @@ class Provider:
         """Enter: what the canvas ends with (pick() returns it), or None to stay on it."""
         return node.path
 
+    def actions(self, node):
+        """Keys handled on `node`: [(key, name, hint)]. A key is a control character the canvas
+        and the usual terminals leave free (⌃A ⌃D ⌃E ⌃F ⌃K ⌃L ⌃N ⌃O ⌃P ⌃R ⌃S ⌃T ⌃W ⌃Y: not ⌃B,
+        tmux's, nor ⌃V, Windows Terminal's paste); the hint ('⌃R reply') is shown along the bottom."""
+        return []
+
+    def act(self, node, name, canvas):
+        """Do the action `name` on `node`. canvas.ask() opens a typing line, canvas.outside()
+        runs something with the terminal (an editor, another canvas), canvas.say() tells you how it
+        went. A value ends the canvas, as choose()'s does."""
+        return None
+
     def preview(self, node):
         """What the reading pane shows for `node`: text (wrapped to fit), or None for nothing."""
         return None
@@ -742,6 +754,34 @@ class Canvas:
         self.page = 10                      # and how many it shows
         self._preview = (None, 0, None)     # (node, width, its lines) last shown there
         self._at_end = False                # the pane showed its last line
+        self.asking = None                  # (prompt, text, done, choices): the typing line, open
+        self.message = None                 # what say() said, until the next key
+        self.waiting = []                   # what outside() was given, to run with the terminal
+
+    # -- for actions
+    def ask(self, prompt, done, text='', choices=None):
+        """Open the typing line along the bottom: Enter calls done(text), Esc closes it. With
+        `choices` (letters, 'yne'), one of those keys answers at once: done(letter). What done()
+        returns ends the canvas unless it's None; it may ask again."""
+        self.asking = (prompt, text, done, choices)
+
+    def say(self, text):
+        """A line in the bar until the next key: what an action did."""
+        self.message = text
+
+    def outside(self, fn):
+        """Run fn() with the terminal to itself, after this key: the canvas steps aside and comes
+        back. fn runs programs with terminal() (an editor, a pager) or pick()s on another canvas."""
+        self.waiting.append(fn)
+
+    def drain(self):
+        """Run what outside() was given (run() does, with the terminal set aside)."""
+        while self.waiting:
+            fn = self.waiting.pop(0)
+            try:
+                fn()
+            except Exception as e:      # an action that fails says so; it doesn't take the canvas down
+                self.say(f'failed: {e}')
 
     # -- what changed underneath
     def refresh(self):
@@ -1014,14 +1054,29 @@ class Canvas:
                     s.append('\033[0m' + st); cur = st
                 s.append(ch)
             lines.append(''.join(s) + '\033[0m' + beside)
-        lines.append(self.bar(full))
-        if o.footer:
+        lines.append(self.typing_line(full) if self.asking else self.bar(full))
+        if o.footer and not self.asking:
             lines.append(o.footer(full))
-        else:
-            hint = '↑↓ move  →/tab open  ← parent  type filter  ⌃X fold  ' + \
-                   ('pgup/pgdn scroll  ' if pane_w else '') + '⏎ choose  esc cancel'
+        elif self.asking:
+            hint = 'esc cancel' if self.asking[3] is not None else '⏎ done  esc cancel  ⌃U clear  ⌃W word'
             lines.append(P.fg('hint') + hint[:full - 1] + '\033[0m')
+        else:
+            acts = [h for _, _, h in self.source.actions(self.focus)] if not isinstance(self.focus, Stub) else []
+            hint = '  '.join(acts + ['↑↓ move  →/tab open  ← parent  type filter  ⌃X fold  ' +
+                                     ('pgup/pgdn scroll  ' if pane_w else '') + '⏎ choose  esc cancel'])
+            lines.append(P.fg('hint') + clip(hint, full - 1) + '\033[0m')
         return lines, (ox, oy) != (round(tx), round(ty)) or self.source.busy()
+
+    def typing_line(self, w):
+        """The open typing line: its prompt in a chip, then what's typed, the end of it if it's long."""
+        prompt, text, _, choices = self.asking
+        P = self.paint
+        head = P.on('bg', 'filter', True) + ' ' + printable(prompt) + ' ' + '\033[0m '
+        room = max(4, w - cells(prompt) - 5)
+        text = printable(text)
+        while cells(text) > room - 1:
+            text = text[1:]
+        return head + ('' if choices is not None else P.fg('path', 1, True) + text + '▏') + '\033[0m'
 
     def pane_rows(self, width, height):
         """The reading pane, `height` rows `width` wide: a line down its left side, the choice's
@@ -1080,6 +1135,8 @@ class Canvas:
         p = self.focus.parent
         if p and p.filter:
             tail.append(('filter: ' + p.filter + '▏', 'bg', 'filter', False))
+        if self.message:
+            tail.append((self.message, 'bg', 'filter', False))
 
         segs = [(printable(t), *rest) for t, *rest in segs]
         tail = [(printable(t), *rest) for t, *rest in tail]
@@ -1224,9 +1281,16 @@ def keys(data):
 
 def apply(c, k, opts):
     """One key; returns ('done', what the provider chose: the path) / ('cancel', None) / None."""
+    if c.asking:
+        return answer(c, k)
+    c.message = None
     p = c.focus.parent
     if k in ('esc', '\x03', '\x07'):
         return 'cancel', None
+    acts = {} if isinstance(c.focus, Stub) else {key: name for key, name, _ in c.source.actions(c.focus)}
+    if k in acts:
+        done = c.source.act(c.focus, acts[k], c)
+        return None if done is None else ('done', done)
     if k in ('\r', '\n'):
         chosen = c.source.choose(c.focus)
         if chosen is not None:
@@ -1254,6 +1318,41 @@ def apply(c, k, opts):
     elif len(k) == 1 and k.isprintable():
         c.refilter((p.filter if p else '') + k)
     return None
+
+
+def answer(c, k):
+    """A key while the typing line is open."""
+    prompt, text, done, choices = c.asking
+    if k in ('esc', '\x03', '\x07'):
+        c.asking = None
+        return None
+    if choices is not None:
+        if len(k) != 1 or k.lower() not in choices:
+            return None
+        c.asking, text = None, k.lower()
+    elif k in ('\r', '\n'):
+        c.asking = None
+    else:
+        if k in ('\x7f', '\x08'):
+            text = text[:-1]
+        elif k == '\x15':
+            text = ''
+        elif k == '\x17':                  # ⌃W: the last word
+            text = text.rstrip(' ')
+            text = text[:text.rfind(' ') + 1]
+        elif len(k) == 1 and k.isprintable():
+            text += k
+        c.asking = (prompt, text, done, choices)
+        return None
+    r = done(text)
+    return None if r is None else ('done', r)
+
+
+def terminal(cmd, **kw):
+    """Run `cmd` on the terminal itself (an editor, a pager), even when stdout is a pipe, as it
+    is under cdi; its exit status. For outside()."""
+    with open('/dev/tty', 'r+b', buffering=0) as t:
+        return subprocess.call(cmd, stdin=t, stdout=t, stderr=t, **kw)
 
 
 def capture():
@@ -1320,6 +1419,15 @@ def run(opts):
                     break
             if result:
                 break
+            if c.waiting:       # an action's turn with the terminal: step aside, then come back
+                out('\033[?25h\033[?1049l')
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                try:
+                    c.drain()
+                finally:
+                    ttymod.setraw(fd)
+                    out('\033[?1049h\033[?25l')
+                    size = None
     finally:
         out('\033[?25h\033[?1049l')
         termios.tcsetattr(fd, termios.TCSADRAIN, old)

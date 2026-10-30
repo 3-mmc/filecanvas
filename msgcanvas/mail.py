@@ -3,11 +3,11 @@ thread's messages as the tree of who replied to whom. The reading pane shows the
 
 Read from notmuch's index of the maildirs mbsync keeps (accounts.py); nothing here changes mail
 yet. A thread watches notmuch's revision, so mail that `msgcanvas sync` brings in appears."""
-import email, email.policy, email.utils, html.parser, os, re, threading, time
+import email, email.policy, email.utils, hashlib, html.parser, os, re, subprocess, threading, time
 
 import notmuch2
 
-from . import filecanvas as fc
+from . import compose, files, filecanvas as fc
 
 # Folders shown first, in this order, by the start of their name in English, German or Czech.
 ORDER = (('INBOX',), ('Sent', 'Gesendet', 'Odeslan'), ('Drafts', 'Entwürfe', 'Koncept'),
@@ -140,11 +140,12 @@ def any_of(msgs, key):
 class Mail(fc.Provider):
     """Accounts (accounts.Account) → folders → threads → messages, each with its replies.
     `KINDS` are the node kinds it answers for."""
-    KINDS = ('account', 'folder', 'thread', 'message')
+    KINDS = ('account', 'folder', 'thread', 'message', 'drafts', 'draft')
     pane = True
 
-    def __init__(self, accounts, watch=2.0):
+    def __init__(self, accounts, watch=2.0, pick=None):
         self.accounts = accounts
+        self.pick = pick or (lambda start: fc.pick(start, glyphs='plain'))   # a file, to attach
         self._seen = None
         if watch:
             threading.Thread(target=self.watch, args=(watch,), daemon=True).start()
@@ -175,6 +176,8 @@ class Mail(fc.Provider):
                 return self.folders(node)
             if node.kind == 'folder':
                 return self.threads(node)
+            if node.kind == 'drafts':
+                return [self.draft_node(path, node) for path in compose.drafts(node.parent.data)]
             return [self.message_node(m, node) for m in
                     (node.data['messages'] if node.kind == 'thread' else node.data['replies'])]
         except notmuch2.NotmuchError as e:
@@ -196,6 +199,9 @@ class Mail(fc.Provider):
                 data = dict(query=q, rel=rel, total=db.count_messages(q),
                             unread=db.count_messages(q + ' and tag:unread'))
                 nodes.append(fc.Node(f'{node.path}/{rel}', folder_name(rel), True, node, 'folder', data=data))
+        kept = compose.drafts(a)
+        if kept:
+            nodes.append(fc.Node(f'{node.path}{SEP}drafts', 'Unsent', True, node, 'drafts', data=dict(count=len(kept))))
         if not nodes:
             raise OSError(0, 'no mail yet: msgcanvas sync')
         return nodes
@@ -212,6 +218,12 @@ class Mail(fc.Provider):
                 out.append(fc.Node(f'{node.path}{SEP}{t.threadid}', data['subject'], data['count'] > 1,
                                    node, 'thread', data=data))
         return out
+
+    def draft_node(self, path, parent):
+        headers, attach, _ = compose.parse(path)
+        to = ', '.join(who(a) for a in headers.get('To', '').split(',') if a.strip()) or 'nobody yet'
+        return fc.Node(f'{parent.path}{SEP}{os.path.basename(path)}', f'{headers.get("Subject") or "(no subject)"} → {to}',
+                       False, parent, 'draft', data=dict(path=path, attach=attach))
 
     def message_node(self, m, parent):
         return fc.Node(f'{parent.path}{SEP}{m["mid"]}', f'{m["author"]} · {when(m["date"])}',
@@ -234,6 +246,8 @@ class Mail(fc.Provider):
             return f'{node.name} {d["unread"]}'
         if node.kind == 'thread' and d['count'] > 1:
             return f'{node.name} ({d["count"]})'
+        if node.kind == 'drafts':
+            return f'{node.name} {d["count"]}'
         return node.name
 
     def unread(self, node):
@@ -293,7 +307,148 @@ class Mail(fc.Provider):
             return '\n'.join(lines)
         if node.kind == 'message':
             return read(d['path'])
+        if node.kind == 'drafts':
+            return f'{d["count"]} not sent yet: ⌃E goes on writing one, ⌃D throws it away'
+        if node.kind == 'draft':
+            with open(d['path']) as f:
+                return f.read()
         return None
 
     def choose(self, node):
         return None      # a mail client stays open: Enter opens, Esc leaves
+
+    # -- writing, and what's attached
+    def message_path(self, node):
+        """The file of the message `node` is (a thread of one is its message), or None."""
+        if node.kind == 'message':
+            return node.data['path']
+        if node.kind == 'thread' and node.data['count'] == 1:
+            return node.data['messages'][0]['path']
+        return None
+
+    def account_of(self, node):
+        while node is not None and node.kind != 'account':
+            node = node.parent
+        return node.data if node is not None else None
+
+    def actions(self, node):
+        if node.kind in ('drafts',):
+            return [('\x0e', 'new', '⌃N new')]
+        if node.kind == 'draft':
+            return [('\x05', 'edit', '⌃E edit'), ('\x04', 'discard', '⌃D throw away'), ('\x0e', 'new', '⌃N new')]
+        out = [('\x0e', 'new', '⌃N new')]
+        path = self.message_path(node)
+        if path:
+            out += [('\x12', 'reply', '⌃R reply'), ('\x01', 'reply-all', '⌃A reply all'),
+                    ('\x06', 'forward', '⌃F forward')]
+            if attachments(path):
+                out += [('\x0f', 'open', '⌃O open attached'), ('\x13', 'save', '⌃S save attached')]
+        return out if node.kind in ('account', 'folder', 'thread', 'message') else []
+
+    def act(self, node, name, canvas):
+        a = self.account_of(node)
+        path = self.message_path(node)
+        if name == 'new':
+            self.write(canvas, a, compose.new(a))
+        elif name in ('reply', 'reply-all'):
+            self.write(canvas, a, compose.reply(a, path, everyone=name == 'reply-all',
+                                                mine=[x.address for x in self.accounts]))
+        elif name == 'forward':
+            self.write(canvas, a, compose.forward(a, path))
+        elif name == 'edit':
+            self.write(canvas, a, node.data['path'])
+        elif name == 'discard':
+            def done(k):
+                if k == 'y':
+                    compose.discard(node.data['path'])
+                    self.invalidate(node.parent.path)
+                    self.invalidate(node.parent.parent.path)
+                    canvas.say('thrown away')
+            canvas.ask('throw this draft away?  y yes  n no', done, choices='yn')
+        elif name == 'open':
+            self.attached(canvas, path, lambda f: (files.open_file(f), canvas.say(f'opening {os.path.basename(f)}')))
+        elif name == 'save':
+            saved = [files.copy_to(f, files.downloads()) for f in extract(path)]
+            canvas.say(f'saved {len(saved)} to {files.downloads()}' if saved else 'nothing attached')
+        return None
+
+    def write(self, canvas, a, path):
+        """Edit the draft in your editor, outside the canvas, then ask what to do with it."""
+        def edit():
+            fc.terminal(compose.edit_command(path))
+            self.after_edit(canvas, a, path)
+        canvas.outside(edit)
+
+    def after_edit(self, canvas, a, path):
+        headers, attach, body = compose.parse(path)
+        to = headers.get('To') or headers.get('Cc') or headers.get('Bcc') or 'nobody'
+        extra = f', {len(attach)} attached' if attach else ''
+        account_node = '/' + a.name
+
+        def done(k):
+            if k == 'y':
+                try:
+                    canvas.say(f'sent to {compose.send(path, a)}')
+                except (OSError, ValueError, subprocess.SubprocessError) as e:
+                    canvas.say(f'not sent ({e.strerror if isinstance(e, OSError) and e.strerror else e}): kept in Unsent')
+            elif k == 'e':
+                self.write(canvas, a, path)
+            elif k == 'a':
+                def choose():
+                    chosen = self.pick(files.downloads())
+                    if chosen:
+                        compose.attach(path, chosen)
+                    self.after_edit(canvas, a, path)
+                canvas.outside(choose)
+            elif k == 'd':
+                canvas.say('kept in Unsent')
+            elif k == 'q':
+                compose.discard(path)
+                canvas.say('thrown away')
+            self.invalidate(account_node)
+            self.invalidate(account_node + SEP + 'drafts')
+        canvas.ask(f'to {fc.clip(to, 40)}{extra}:  y send  e edit  a attach  d keep for later  q throw away',
+                   done, choices='yeadq')
+
+    def attached(self, canvas, path, then):
+        """then(file) for one of the message's attachments: the only one, or the one you pick."""
+        found = extract(path)
+        if len(found) == 1:
+            then(found[0])
+        elif found:
+            shown = found[:9]
+            names = '  '.join(f'{i + 1} {fc.clip(os.path.basename(f), 24)}' for i, f in enumerate(shown))
+            canvas.ask(f'open which?  {names}', lambda k: then(shown[int(k) - 1]),
+                       choices=''.join(str(i + 1) for i in range(len(shown))))
+        else:
+            canvas.say('nothing attached')
+
+
+def attachments(path):
+    """The names of what's attached to the message in `path`."""
+    try:
+        with open(path, 'rb') as f:
+            msg = email.message_from_binary_file(f, policy=email.policy.default)
+    except OSError:
+        return []
+    return [a.get_filename() or a.get_content_type().replace('/', '.') for a in msg.iter_attachments()]
+
+
+def extract(path):
+    """What's attached to the message in `path`, as files in msgcanvas's cache (made once)."""
+    with open(path, 'rb') as f:
+        msg = email.message_from_binary_file(f, policy=email.policy.default)
+    folder = os.path.join(files.CACHE, 'attachments', hashlib.sha1(path.encode()).hexdigest()[:16])
+    out = []
+    for a in msg.iter_attachments():
+        name = files.safe_name(a.get_filename() or a.get_content_type().replace('/', '.'))
+        target = os.path.join(folder, name)
+        if not os.path.exists(target):
+            data = a.get_payload(decode=True)
+            if data is None and a.is_multipart():          # an attached message
+                data = a.as_bytes()
+            os.makedirs(folder, exist_ok=True)
+            with open(target, 'wb') as f:
+                f.write(data or b'')
+        out.append(target)
+    return out

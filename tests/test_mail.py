@@ -4,13 +4,8 @@ makes. Needs notmuch and python3-notmuch2.
     python3 -m unittest discover tests"""
 import atexit, contextlib, io, os, re, shutil, subprocess, tempfile, textwrap, time, unittest
 
-TMP = tempfile.mkdtemp(prefix='msgcanvas-test-')
-atexit.register(shutil.rmtree, TMP, True)
-os.environ['XDG_CONFIG_HOME'] = os.path.join(TMP, 'config')
-os.environ['XDG_DATA_HOME'] = os.path.join(TMP, 'data')
-os.environ['XDG_STATE_HOME'] = os.path.join(TMP, 'state')
-
-from msgcanvas import accounts, filecanvas as fc, mail   # noqa: E402
+from tests import TMP                            # the private home every test runs in
+from msgcanvas import accounts, filecanvas as fc, mail
 
 ANSI = re.compile(r'\x1b\[[0-9;?]*[a-zA-Z]')
 MAILDIR = os.path.join(TMP, 'Mail')
