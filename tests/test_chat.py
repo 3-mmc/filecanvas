@@ -92,15 +92,35 @@ class Events(unittest.TestCase):
         self.assertEqual(p.chat_name('1203630-16@g.us'), 'group')
         self.assertEqual(p.who('Stanley_0'), 'Stanley_0')
 
-    def test_people_keep_their_own_colour_in_a_chat(self):
+    def test_everyone_has_their_own_colour_and_no_two_share_one_in_a_chat(self):
         s, p = self.serve()
-        order = ['ann', 'me', 'bo', 'ann', 'cy', 'bo']
-        self.assertEqual([p.colour('grp', who) for who in order], [0, 1, 1, 0, 2, 1])
-        self.assertEqual(p.colour('other', 'cy'), 0)                      # per chat
+        order = ['ann', 'me', 'bo', 'ann', 'cy', 'bo', 'di', 'ed']
+        got = {who: p.colour('grp', who) for who in order}
+        others = [got[w] for w in got if w != 'me']
+        self.assertEqual(len(others), len(set(others)))                 # none the same in the chat
+        self.assertEqual(got['ann'], chat.preferred('ann'))             # the first keeps their own
+        self.assertEqual(p.colour('grp', 'ann'), got['ann'])            # and keeps it
+        self.assertEqual(p.colour('just-cy', 'cy'), chat.preferred('cy'))    # alone, everyone has their own
+        clash = next(w for w in (f'x{i}' for i in range(200)) if chat.preferred(w) == chat.preferred('ann'))
+        self.assertNotEqual(p.colour('grp', clash), got['ann'])         # someone with ann's: the next free
         c = chat.Chat(serve=s)
         run = lambda who: fc.Node('r', who, True, None, 'run', source=c, data=(p, 'grp', [], who))
-        self.assertEqual(c.chip(run('bo')), ('person_fg', 'person1'))
+        self.assertEqual(c.chip(run('bo')), ('person_fg', f'person{got["bo"]}'))
         self.assertEqual(c.chip(run('me')), ('home_fg', 'home_bg'))
+
+    def test_an_open_chat_wears_its_colour(self):
+        s, p = self.serve()
+        s.apply({'event': 'chats', 'profile': p.id, 'chats': [{'id': 'ann', 'name': 'Ann'}, {'id': 'me', 'name': 'me'}]})
+        c = chat.Chat(serve=s)
+        node = lambda cid: fc.Node('/@x' + cid, cid, True, None, 'chat', source=c, data=(p, cid))
+        ann = node('ann')
+        self.assertIsNone(c.chip(ann))                                  # closed: plain
+        ann.open = True
+        self.assertEqual(c.chip(ann), ('person_fg', f'person{chat.preferred("ann")}'))   # Ann's, as in her messages
+        self.assertEqual(c.chip(ann), c.chip(fc.Node('r', 'ann', True, None, 'run', source=c, data=(p, 'ann', [], 'ann'))))
+        mine = node('me')
+        mine.open = True
+        self.assertEqual(c.chip(mine), ('home_fg', 'home_bg'))         # your own chat
 
     def test_a_skipped_profile_is_kept(self):
         s, _ = self.serve()

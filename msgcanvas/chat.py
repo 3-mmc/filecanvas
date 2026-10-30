@@ -6,7 +6,7 @@ save a message's file (fetching it first).
 nchat runs as a child, `nchat --serve`, speaking JSON lines (nchat's doc/serve.md): requests go
 in, replies and events come out. Everything it says is kept here, by profile, chat and message
 id, and the canvas is invalidated where it changed. Nothing is marked read yet."""
-import json, os, subprocess, threading, time
+import json, os, subprocess, threading, time, zlib
 
 from . import files, filecanvas as fc
 from .mail import SEP
@@ -64,17 +64,26 @@ class Profile:
         return named or plain(user)
 
     def colour(self, chat, sender):
-        """Which of the theme's colours for people `sender` has in `chat`: the next free one when
-        they first write, then theirs for as long as msgcanvas is open (none for you)."""
+        """Which of the theme's colours for people `sender` has in `chat`: their own (from who they
+        are, so the same in every chat and every time), unless someone in this chat has it already:
+        then the next one free. You have the bar's own colours instead."""
         seen = self.colours.setdefault(chat, {})
         if sender not in seen:
-            seen[sender] = len([s for s in seen if self.who(s) != 'You'])
+            taken = {n for s, n in seen.items() if self.who(s) != 'You'}
+            own = preferred(sender)
+            seen[sender] = next(((own + i) % fc.PEOPLE for i in range(fc.PEOPLE)
+                                 if (own + i) % fc.PEOPLE not in taken), own)
         return seen[sender]
 
     def chat_name(self, chat):
         c = self.chats.get(chat, {})
         name = c.get('name') or chat
         return self.who(chat) if name == chat else name   # named by its id: a contact's name, once known
+
+
+def preferred(ident):
+    """Someone's own colour (or a group's): one of the theme's people, the same every time."""
+    return zlib.crc32((ident or '').encode()) % fc.PEOPLE
 
 
 def plain(user):
@@ -454,7 +463,13 @@ class Chat(fc.Provider):
         return MESSAGE_WIDTH if node.kind == 'chat-message' else None
 
     def chip(self, node):
-        """A run's name: you in the bar's first chip's colours, everyone else in their own."""
+        """A run's name in its writer's colour (you: the bar's first chip's), and a chat that's
+        open in its own: the other person's, or the group's, so open chats stand apart."""
+        if node.kind == 'chat' and node.open:
+            p, chat = node.data
+            if p.who(chat) == 'You':
+                return 'home_fg', 'home_bg'
+            return 'person_fg', f'person{preferred(chat)}'
         if node.kind != 'run':
             return None
         p, chat, _, sender = node.data

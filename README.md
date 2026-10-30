@@ -44,9 +44,11 @@ Chats come from [nchat](https://github.com/3-mmc/nchat) (the `feature/serve` bra
 merged), which msgcanvas runs as `nchat --serve`: profiles (WhatsApp, Signal, Instagram, …) sit
 beside the mail accounts, each opening into its chats (pinned first, then the latest). A chat
 opens on the canvas itself into its latest 20 messages, oldest at the top: each person's messages
-in a row hang off their name (a chip in their own colour), each whole, ending in its time and, if
+in a row hang off their name (a chip in their own colour, the same in every chat, and never two
+alike in one), each whole, ending in its time and, if
 it's yours, ✓ (there) or ✓✓ (read). You land on the newest and stay on it as more come; **↑
-earlier** (Enter) shows 20 more. A photo shows its picture in the pane beside.
+earlier** (Enter) shows 20 more. A chat you've opened wears its colour too (the other person's,
+or the group's), so open chats stand apart. A photo shows its picture in the pane beside.
 
 ```
 git clone -b feature/serve https://github.com/3-mmc/nchat && cd nchat && mkdir build && cd build

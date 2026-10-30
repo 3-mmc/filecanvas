@@ -1,4 +1,4 @@
-# Vendored from filecanvas (github.com/3-mmc/filecanvas) at 033c8a7: do not edit here.
+# Vendored from filecanvas (github.com/3-mmc/filecanvas) at 2ca06be: do not edit here.
 # Change it there and run tools/vendor-filecanvas.py; msgcanvas's own choices are in its providers.
 """filecanvas: the file system as one canvas you move across.
 
@@ -41,7 +41,7 @@ CONFIG = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~
 #   home_* seg_* cwd_fg sep_fg               the path bar, as powerline-shell draws a prompt
 #   repo_clean_* repo_dirty_*                the bar's git chip
 #   git_dirty git_staged git_untracked git_conflict   the marks beside changed entries
-#   person0 … person5, person_fg       chips for people (a chat's senders), and their text
+#   person0 … person9, person_fg       chips for people (a chat's senders), and their text
 # `ls_colors` is the theme's default for --ls-colors; you can still change it.
 THEMES = {
     'powerline': {  # powerline-shell's default theme
@@ -52,6 +52,7 @@ THEMES = {
         'git_dirty': 161, 'git_staged': 148, 'git_untracked': 130, 'git_conflict': 9,
         'rest': 248, 'ghost': 237, 'ls_colors': True,
         'person_fg': 15, 'person0': 24, 'person1': 23, 'person2': 58, 'person3': 96, 'person4': 130, 'person5': 61,
+        'person6': 28, 'person7': 161, 'person8': 91, 'person9': 17,
     },
     'amber': {  # cdeck's
         'bg': '#121212', 'sel_bg': 214, 'sel_fg': 232, 'path': 214, 'path_line': 214,
@@ -61,6 +62,7 @@ THEMES = {
         'git_dirty': 166, 'git_staged': 142, 'git_untracked': 137, 'git_conflict': 196,
         'rest': 246, 'ghost': 237, 'ls_colors': True,
         'person_fg': 230, 'person0': 94, 'person1': 130, 'person2': 58, 'person3': 95, 'person4': 23, 'person5': 88,
+        'person6': 22, 'person7': 54, 'person8': 60, 'person9': 125,
     },
     'nord': {
         'bg': '#2e3440', 'sel_bg': '#88c0d0', 'sel_fg': '#2e3440', 'path': '#88c0d0',
@@ -73,6 +75,7 @@ THEMES = {
         'git_untracked': '#b48ead', 'git_conflict': '#bf616a',
         'rest': '#a7adba', 'ghost': '#434c5e', 'ls_colors': True,
         'person_fg': '#eceff4', 'person0': '#4c6a94', 'person1': '#3e6573', 'person2': '#56653a', 'person3': '#6a4a6a', 'person4': '#8c5040', 'person5': '#4e5c88',
+        'person6': '#337744', 'person7': '#773355', 'person8': '#553377', 'person9': '#776633',
     },
     'gruvbox': {
         'bg': '#282828', 'sel_bg': '#fabd2f', 'sel_fg': '#282828', 'path': '#fabd2f',
@@ -85,6 +88,7 @@ THEMES = {
         'git_untracked': '#d3869b', 'git_conflict': '#fb4934',
         'rest': '#a89984', 'ghost': '#504945', 'ls_colors': True,
         'person_fg': '#282828', 'person0': '#83a598', 'person1': '#8ec07c', 'person2': '#b8bb26', 'person3': '#d3869b', 'person4': '#fe8019', 'person5': '#fabd2f',
+        'person6': '#a89984', 'person7': '#c9a0dc', 'person8': '#7fb4ca', 'person9': '#e9b4a0',
     },
     'solarized-dark': {
         'bg': '#002b36', 'sel_bg': '#268bd2', 'sel_fg': '#fdf6e3', 'path': '#93a1a1',
@@ -97,6 +101,7 @@ THEMES = {
         'git_untracked': '#6c71c4', 'git_conflict': '#dc322f',
         'rest': '#839496', 'ghost': '#073642', 'ls_colors': True,
         'person_fg': '#002b36', 'person0': '#3693d6', 'person1': '#2aa198', 'person2': '#859900', 'person3': '#8487cc', 'person4': '#df619a', 'person5': '#d77148',
+        'person6': '#b58900', 'person7': '#93a1a1', 'person8': '#e5726f', 'person9': '#a0d070',
     },
 }
 
@@ -256,7 +261,7 @@ def ls_colors():
 
 # -- pictures in the pane
 
-PEOPLE = 6      # person0 … person5 in every theme
+PEOPLE = 10     # person0 … person9 in every theme
 
 # -- motion: short, and none at all when calm (CDECK_CALM, or a frame drawn without animate)
 PULSE = 0.9         # seconds a row's flash takes to fade back
