@@ -6,7 +6,7 @@ import atexit, os, re, shutil, tempfile, time, unittest
 
 import tests                                    # the private test home, before msgcanvas
 
-from msgcanvas import chat, filecanvas as fc, together
+from msgcanvas import chat, treecanvas as fc, together
 
 NCHAT = os.environ.get('NCHAT') or shutil.which('nchat')
 TMP = tempfile.mkdtemp(prefix='msgcanvas-chat-')

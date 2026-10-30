@@ -1,7 +1,7 @@
 """Several providers as one tree: their top-level nodes side by side under one root, and every
 other node answered by the provider whose KINDS has its kind. Each one's invalidate() comes
 here, so the canvas, which only knows this one, hears it."""
-from . import filecanvas as fc
+from . import treecanvas as fc
 
 
 class Together(fc.Provider):

@@ -7,7 +7,7 @@ import email, email.policy, email.utils, hashlib, html.parser, os, re, subproces
 
 import notmuch2
 
-from . import compose, files, filecanvas as fc
+from . import compose, files, treecanvas as fc
 
 # Folders shown first, in this order, by the start of their name in English, German or Czech.
 ORDER = (('INBOX',), ('Sent', 'Gesendet', 'Odeslan'), ('Drafts', 'Entwürfe', 'Koncept'),

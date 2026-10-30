@@ -7,7 +7,7 @@ import email, email.policy, os, shutil, subprocess, sys, tempfile, unittest
 import tests                                    # the private test home, before msgcanvas
 
 import tests.test_mail as tm          # its maildir, notmuch index and environment
-from msgcanvas import accounts, compose, files, filecanvas as fc, mail
+from msgcanvas import accounts, compose, files, treecanvas as fc, mail
 
 OUT = os.path.join(tm.TMP, 'sent-by-msmtp.eml')
 FAKE_MSMTP = [sys.executable, '-c', f'import sys; open({OUT!r}, "wb").write(sys.stdin.buffer.read())']

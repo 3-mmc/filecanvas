@@ -2,8 +2,8 @@
 
 Mail and chat on one canvas you move across: accounts branch into folders, folders into
 threads (newest first), threads into who replied to whom, and the message you're on is open in a
-reading pane beside them. Drawn by [filecanvas](https://github.com/3-mmc/filecanvas) through its
-providers, vendored here (`tools/vendor-filecanvas.py`).
+reading pane beside them. Drawn by [treecanvas](https://github.com/3-mmc/treecanvas) through its
+providers, vendored here (`tools/vendor-treecanvas.py`).
 
 Mail is synced by mbsync into `~/Mail/<account>/`, indexed by notmuch and sent by msmtp. Syncing
 only fetches (`Sync Pull`): reading, flags and deleting don't reach the server yet.

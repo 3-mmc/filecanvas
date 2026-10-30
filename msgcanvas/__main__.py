@@ -9,7 +9,7 @@
 """
 import os, shutil, subprocess, sys
 
-from . import accounts, filecanvas as fc
+from . import accounts, treecanvas as fc
 
 LOOK = dict(colmax=40, glyphs='plain', ease=1 if os.environ.get('CDECK_CALM') else 0.3)
 

@@ -5,7 +5,7 @@ makes. Needs notmuch and python3-notmuch2.
 import atexit, contextlib, io, os, re, shutil, subprocess, tempfile, textwrap, time, unittest
 
 from tests import TMP                            # the private home every test runs in
-from msgcanvas import accounts, filecanvas as fc, mail
+from msgcanvas import accounts, treecanvas as fc, mail
 
 ANSI = re.compile(r'\x1b\[[0-9;?]*[a-zA-Z]')
 MAILDIR = os.path.join(TMP, 'Mail')

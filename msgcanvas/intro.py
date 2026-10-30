@@ -4,7 +4,7 @@ pressed). It stays at least MIN seconds and at most MAX. CDECK_CALM holds it sti
 MSGCANVAS_NO_INTRO=1, or a terminal that isn't one, skips it."""
 import os, select, sys, time
 
-from . import filecanvas as fc
+from . import treecanvas as fc
 
 LOGO = [
     "███╗   ███╗███████╗ ██████╗  ██████╗ █████╗ ███╗   ██╗██╗   ██╗ █████╗ ███████╗",

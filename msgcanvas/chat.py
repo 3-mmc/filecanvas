@@ -8,7 +8,7 @@ in, replies and events come out. Everything it says is kept here, by profile, ch
 id, and the canvas is invalidated where it changed. Nothing is marked read yet."""
 import json, os, subprocess, threading, time, zlib
 
-from . import files, filecanvas as fc
+from . import files, treecanvas as fc
 from .mail import SEP
 
 PROTOCOLS = {'WhatsAppMd': 'WhatsApp', 'Signal': 'Signal', 'Instagram': 'Instagram',
