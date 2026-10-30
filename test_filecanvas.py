@@ -303,6 +303,13 @@ class Wrap(unittest.TestCase):
         self.assertEqual(fc.wrap('a\r\n\nb\tc', 10), ['a', '', 'b   c'])
         self.assertTrue(all(fc.cells(l) <= 5 for l in fc.wrap('漢字漢字漢字 ok', 5)))
 
+    def test_a_hanging_indent_and_never_past_the_width(self):
+        self.assertEqual(fc.wrap('  one two three four', 10), ['  one two', '  three', '  four'])
+        for text in ('  a bcdefghijklmnop qrstuvwxyz', '    x ' + 'y' * 30, '  ' + '漢' * 20):
+            got = fc.wrap(text, 9)
+            self.assertTrue(all(fc.cells(l) <= 9 for l in got), got)
+            self.assertEqual(''.join(got).replace(' ', ''), text.replace(' ', ''))
+
 
 class FileSystemProvider(unittest.TestCase):
     def test_is_the_default_and_keeps_its_look(self):

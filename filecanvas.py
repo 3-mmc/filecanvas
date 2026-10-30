@@ -179,10 +179,15 @@ def printable(text):
 
 
 def wrap(text, width):
-    """`text` as lines of at most `width` columns, broken at spaces where it can be."""
+    """`text` as lines of at most `width` columns, broken at spaces where it can be. A line's
+    leading spaces go on to the lines it wraps onto (a hanging indent)."""
     width = max(width, 2)
     out = []
     for para in text.replace('\r', '').expandtabs(4).split('\n'):
+        indent = para[:len(para) - len(para.lstrip(' '))]
+        if len(indent) > width // 2:
+            indent = ''
+        start = len(out)
         line = None
         for word in printable(para).split(' '):
             if line is not None and cells(line) + 1 + cells(word) <= width:
@@ -190,11 +195,12 @@ def wrap(text, width):
                 continue
             if line is not None:
                 out.append(line)
-            while cells(word) > width:          # longer than a line on its own: cut it
-                head = clip(word, width + 1)[:-1]
-                out.append(head)
-                word = word[len(head):]
-            line = word
+            lead = '' if len(out) == start else indent      # every line but a paragraph's first
+            while cells(lead + word) > width:   # longer than a line on its own: cut it
+                head = clip(word, width - cells(lead) + 1)[:-1]
+                out.append(lead + head)
+                word, lead = word[len(head):], indent
+            line = lead + word
         out.append(line or '')
     return out
 
