@@ -621,6 +621,22 @@ class Counts(unittest.TestCase):
         self.assertLess(deleted.index('Deleted Items') + len('Deleted Items'), inbox.index('894'))   # after every name
         self.assertIn('894 ─', inbox)                              # the branch line starts after the number
 
+    def test_tint_colours_the_start_of_a_label(self):
+        class Days(fc.Tree):
+            def tint(self, node):
+                return [(2, '#ff8000', True), (4, '#00ff00', False)] if node.name.startswith('30') else []
+
+            def pane_for(self, node):
+                return False
+        c = fc.Canvas('', options(provider=Days({'30 Fri  party': 1, '31 Sat  more': 1}), color='truecolor'))
+        press(c, 'down')                                   # the choice is drawn as a block: not tinted
+        row = next(l for l in c.frame(100, 16, animate=False)[0] if 'party' in l)
+        orange, green = '\x1b[1;38;2;255;128;0m', '38;2;0;255;0m'
+        self.assertIn(orange + '30', row)
+        self.assertIn(green + ' Fri', row)
+        self.assertTrue(ANSI.sub('', row).rstrip().endswith('─30 Fri  party'))
+
+
 class Wrap(unittest.TestCase):
     def test_breaks_at_spaces_and_cuts_long_words(self):
         self.assertEqual(fc.wrap('the quick brown fox', 10), ['the quick', 'brown fox'])
