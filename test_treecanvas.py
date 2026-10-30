@@ -583,6 +583,25 @@ class TaskTrees(unittest.TestCase):
                 a, b = sorted((lum(t[role]), lum(t['bg'])), reverse=True)
                 self.assertGreaterEqual((a + 0.05) / (b + 0.05), 4.5, f'{name} {role}')
 
+
+class AltArrows(unittest.TestCase):
+    def test_they_are_keys_for_providers(self):
+        self.assertEqual(list(fc.keys('\x1b[1;3C\x1b[1;3D\x1b[1;3A\x1b[1;3B\x1b[C')),
+                         ['alt-right', 'alt-left', 'alt-up', 'alt-down', 'right'])
+
+        class Moves(Live):
+            moved = []
+
+            def actions(self, node):
+                return [('alt-right', 'nest', '⌥→ nest')]
+
+            def act(self, node, name, canvas):
+                self.moved.append((name, node.name))
+        c = fc.Canvas('', options(provider=Moves({'a': 1, 'b': 2})))
+        press(c, *fc.keys('\x1b[1;3C'))
+        self.assertEqual(c.source.moved, [('nest', 'a')])
+        self.assertEqual(c.focus.name, 'a')                         # not taken as a plain arrow
+
 class Wrap(unittest.TestCase):
     def test_breaks_at_spaces_and_cuts_long_words(self):
         self.assertEqual(fc.wrap('the quick brown fox', 10), ['the quick', 'brown fox'])

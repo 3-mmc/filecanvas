@@ -596,8 +596,9 @@ class Provider:
 
     def actions(self, node):
         """Keys handled on `node`: [(key, name, hint)]. A key is a control character the canvas
-        and the usual terminals leave free (⌃A ⌃D ⌃E ⌃F ⌃K ⌃L ⌃N ⌃O ⌃P ⌃R ⌃S ⌃T ⌃W ⌃Y: not ⌃B,
-        tmux's, nor ⌃V, Windows Terminal's paste); the hint ('⌃R reply') is shown along the bottom."""
+        and the usual terminals leave free (⌃A ⌃D ⌃E ⌃F ⌃K ⌃L ⌃N ⌃O ⌃P ⌃R ⌃S ⌃T ⌃W ⌃Y ⌃Z: not ⌃B,
+        tmux's, nor ⌃V, Windows Terminal's paste), or 'alt-up' … 'alt-left' for Alt with an arrow;
+        the hint ('⌃R reply') is shown along the bottom."""
         return []
 
     def act(self, node, name, canvas):
@@ -1602,7 +1603,9 @@ def init(shell, cmd='cdi', key='ctrl-t', run=None):
 def keys(data):
     seq = {'\x1b[A': 'up', '\x1b[B': 'down', '\x1b[C': 'right', '\x1b[D': 'left',
            '\x1bOA': 'up', '\x1bOB': 'down', '\x1bOC': 'right', '\x1bOD': 'left', '\x1b[Z': 'backtab',
-           '\x1b[5~': 'pgup', '\x1b[6~': 'pgdn'}
+           '\x1b[5~': 'pgup', '\x1b[6~': 'pgdn',
+           # Alt with an arrow: the canvas leaves them to providers' actions (moving things, say)
+           '\x1b[1;3A': 'alt-up', '\x1b[1;3B': 'alt-down', '\x1b[1;3C': 'alt-right', '\x1b[1;3D': 'alt-left'}
     i = 0
     while i < len(data):
         for s, name in seq.items():
