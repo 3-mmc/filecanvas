@@ -35,11 +35,13 @@ PRESETS = {
                         'Notizen', 'Aufgaben', 'Verlauf der Unterhaltung', 'Synchronisierungsprobleme',
                         'RSS-Feeds', 'Postausgang'))),
     'seznam': dict(imap_host='imap.seznam.cz', smtp_host='smtp.seznam.cz', smtp_port=465),
-    'yahoo': dict(imap_host='imap.mail.yahoo.com', smtp_host='smtp.mail.yahoo.com', smtp_port=465),
+    # Yahoo refuses fetches ("UNAVAILABLE") when they come many at once: one at a time
+    'yahoo': dict(imap_host='imap.mail.yahoo.com', smtp_host='smtp.mail.yahoo.com', smtp_port=465,
+                  pipeline=1),
     'imap': {},
 }
 OAUTH = ('microsoft', 'google')
-BASE = dict(auth='password', imap_port=993, smtp_port=587, patterns='*', max_messages=2000)
+BASE = dict(auth='password', imap_port=993, smtp_port=587, patterns='*', max_messages=2000, pipeline=0)
 
 TEMPLATE = '''# msgcanvas's mail accounts. After editing: `msgcanvas setup` makes the configs from this,
 # `msgcanvas login NAME` stores a password or signs in, `msgcanvas sync` fetches mail.
@@ -105,6 +107,7 @@ class Account:
         if self.auth not in ('password',) + OAUTH:
             raise ValueError(f"{self.name}: auth {self.auth!r} isn't password, {' or '.join(OAUTH)}")
         self.max_messages = int(v['max_messages'])
+        self.pipeline = int(v['pipeline'])      # IMAP commands in flight at once; 0: mbsync's default
         self.maildir = os.path.join(os.path.expanduser(defaults.get('maildir', '~/Mail')), self.name)
 
     @property
@@ -149,6 +152,8 @@ def mbsyncrc(accounts):
         # A password only ever goes as a password: with the XOAUTH2 plugin installed, mbsync
         # would otherwise try OAuth wherever the server offers it (Seznam does) and stop.
         out.append('AuthMechs XOAUTH2' if a.auth in OAUTH else 'AuthMechs PLAIN LOGIN')
+        if a.pipeline:
+            out.append(f'PipelineDepth {a.pipeline}')
         out += ['',
                 f'IMAPStore {a.name}-far', f'Account {a.name}', '',
                 f'MaildirStore {a.name}-near',

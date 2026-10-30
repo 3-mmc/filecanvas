@@ -114,6 +114,7 @@ class Configs(unittest.TestCase):
         self.assertIn('PassCmd "pass show mail/home"', sync)
         self.assertIn('AuthMechs PLAIN LOGIN', sync[:sync.index('IMAPAccount uni')])
         self.assertIn('"!Kalender" "!Kalender/*"', sync)
+        self.assertNotIn('PipelineDepth', sync)                  # only where a server needs it
         self.assertIn('Patterns * "![Gmail]/All Mail" "![Gmail]/Important"', sync)
         self.assertIn('Sync Pull', sync)
         self.assertEqual(sync.count('MaxMessages 500'), 2)          # cz keeps everything
