@@ -43,6 +43,7 @@ OLD_CONFIG = CONFIG.replace(os.sep + 'treecanvas' + os.sep, os.sep + 'filecanvas
 #   repo_clean_* repo_dirty_*                the bar's git chip
 #   git_dirty git_staged git_untracked git_conflict   the marks beside changed entries
 #   alert_fg alert_bg                  a beacon lit (git_conflict's red and white unless a theme says)
+#   glow                               what's changed lately is tinted towards (sel_bg unless a theme says)
 #   person0 … person9, person_fg       chips for people (a chat's senders), and their text
 #   state_done state_doing             what's finished and what's under way (a task tree's)
 # `ls_colors` is the theme's default for --ls-colors; you can still change it.
@@ -294,6 +295,8 @@ FRAME = 1 / 60      # between frames while something moves
 BLINK_FAST = 0.25   # a beacon's half-blink (lit, then not) when what it marks has just come
 BLINK_SLOW = 3.0    # and when it's BLINK_FOR old: each half-blink longer than the last till then
 BLINK_FOR = 3600.0  # after that, it stays lit
+# a glow (glow()) by age: brightest when it's just changed, fading out in steps over a week
+GLOW = ((600, 0.9), (3600, 0.7), (6 * 3600, 0.5), (86400, 0.35), (3 * 86400, 0.2), (7 * 86400, 0.1))
 NOISE = '░▒▓<>/\\|_-=+*#%&$@01'     # cdeck's
 DUST = '▓▒░· '
 SGR_RE = re.compile(r'\x1b\[[0-9;]*m')
@@ -414,6 +417,15 @@ def blink(age):
     n = int(k * math.log((BLINK_FAST + age / k) / BLINK_FAST))
     flip = (BLINK_FAST * math.exp((n + 1) / k) - BLINK_FAST) * k
     return n % 2 == 0, min(flip, BLINK_FOR) - age
+
+
+def glowing(age):
+    """How strongly something changed `age` seconds ago glows (0 not at all), and the age at
+    which that next steps down (None: never again)."""
+    for until, strength in GLOW:
+        if age < until:
+            return strength, until
+    return 0.0, None
 
 
 def update(lines, shown):
@@ -687,6 +699,12 @@ class Provider:
         none. Something new and unread, say: once it's read, return None and invalidate()."""
         return None
 
+    def glow(self, node):
+        """When what `node` is last changed (time.time()), for it to glow: its label tinted towards
+        the theme's glow, brightest when it's just changed and fading over a week (GLOW). None for
+        no glow. Files, by when they were last modified."""
+        return None
+
     def next_change(self):
         """When (time.time()) what's drawn next changes by itself, with nothing to tell the canvas
         (a countdown ticking over, a clock): it draws again then. None: only when told."""
@@ -772,9 +790,10 @@ STAY = object()     # choose(): stay on the canvas, and don't open the branch ei
 
 class FileSystem(Provider):
     """The file system: folders first, dotfiles after, LS_COLORS, git's marks and branch."""
-    def __init__(self, git=True, ls=False):
+    def __init__(self, git=True, ls=False, recent=True):
         self.git = Git(git)
         self.ls = ls_colors() if ls else {}
+        self.recent = recent        # recently changed files glow
 
     @property
     def changed(self):
@@ -792,7 +811,11 @@ class FileSystem(Provider):
         with os.scandir(node.path) as it:
             for e in it:
                 is_dir, key = kind(e)
-                out.append(Node(e.path, e.name, is_dir, node, key))
+                try:
+                    changed = e.stat(follow_symlinks=False).st_mtime if self.recent else None
+                except OSError:
+                    changed = None
+                out.append(Node(e.path, e.name, is_dir, node, key, data=changed))
         out.sort(key=lambda n: (not n.is_dir, n.name.startswith('.'), n.name.casefold()))
         return out
 
@@ -825,6 +848,9 @@ class FileSystem(Provider):
         if hit:
             return ('dir' if n.is_dir else 'file'), hit[1]
         return None
+
+    def glow(self, node):
+        return node.data if self.recent and not node.name.startswith('.') else None
 
     def mark(self, node):
         rank, _, inside = self.git.state(node)
@@ -1000,7 +1026,7 @@ class Canvas:
         self.theme = opts.colours
         self.paint = Paint(self.theme, opts.truecolor)
         self.glyphs = GLYPHS[opts.glyphs]
-        self.source = opts.provider or FileSystem(opts.git, opts.ls_colors)
+        self.source = opts.provider or FileSystem(opts.git, opts.ls_colors, opts.recent)
         self.root = self.source.root()
         self.root.dirs_only = opts.dirs_only
         ids, typed = self.source.locate(start)
@@ -1031,6 +1057,7 @@ class Canvas:
         self.wall = time.time               # for beacons and next_change(), which are dated
         self.flowing = False                # the last frame was mid-motion: the next must follow
         self.next_beacon = None             # seconds from the last frame to a beacon's next flip
+        self.next_glow = None               # and to a glow's next step down
         self.pulses = {}                    # node id: when its row began to flash
         self.statuses = {}                  # key: (text, state, since): chips in the bar
         self.reveal = None                  # (node, first new line, since) in a following pane
@@ -1084,8 +1111,9 @@ class Canvas:
                 waits.append(since + last[state] - now)
         if self.source.busy():
             waits.append(SPIN_STEP)
-        if self.next_beacon is not None:
-            waits.append(self.next_beacon)
+        for w in (self.next_beacon, self.next_glow):
+            if w is not None:
+                waits.append(w)
         at = self.source.next_change()
         if at is not None:
             waits.append(at - self.wall())
@@ -1281,7 +1309,7 @@ class Canvas:
         place(self.root, 0, 0, self.focus, o, nodes)
 
         marks, chips = {}, {}   # (the mark beside it, how bright it is), and its chip colours, per entry
-        wall, self.next_beacon = self.wall(), None
+        wall, self.next_beacon, self.next_glow = self.wall(), None, None
         alert = (T.get('alert_fg', 15), T.get('alert_bg', T.get('git_conflict', 160)))
         for n in nodes:
             stub = isinstance(n, Stub)
@@ -1409,6 +1437,14 @@ class Canvas:
                     c, bold = self.colour(n)
                     if o.grey_rest and n.parent is not self.focus.parent and n.parent is not self.focus:
                         c, bold = 'rest', False   # a branch you're not on
+                    changed = None if isinstance(n, Stub) else self.source.glow(n)
+                    if changed is not None:     # changed lately: towards the glow, by how lately
+                        lit, until = glowing(wall - changed)
+                        if lit:
+                            c = blend(T.get(c, c) if isinstance(c, str) else c, T.get('glow', T.get('sel_bg', 214)), lit)
+                        if until is not None:
+                            due = changed + until - wall
+                            self.next_glow = due if self.next_glow is None else min(self.next_glow, due)
                     style = P.fg(c, s, bold)
                 if self.pulses and animate and not isinstance(n, Stub) and n.path in self.pulses:
                     t = (now - self.pulses[n.path]) / PULSE      # from the highlight back to itself
@@ -1979,6 +2015,8 @@ def parser():
                    help='24-bit colour, or the 256-colour palette (auto)')
     a.add_argument('--ls-colors', action=argparse.BooleanOptionalAction, default=None,
                    help="colour entries the way `ls` does, from LS_COLORS (the theme's default)")
+    a.add_argument('--recent', action=argparse.BooleanOptionalAction, default=True,
+                   help='recently changed files glow, fading over a week (default: on)')
     a.add_argument('--git', action=argparse.BooleanOptionalAction, default=True,
                    help='mark changed entries and show the branch (on)')
     a.add_argument('--limit', type=int, default=0, help='most children shown per folder, the rest as "↓ N more"; 0 = all, trailing off screen (0)')

@@ -118,6 +118,10 @@ own:
   (`CDECK_CALM`) keeps it lit without blinking.
 - `next_change()` returns when what's drawn next changes by itself (a countdown ticking over, a
   clock): the canvas draws again then.
+- `glow(node)` returns when a node last changed (`time.time()`): its label is tinted towards the
+  theme's glow, brightest for ten minutes and fading out in steps over a week, the canvas waking
+  only for each step. Files do, by when they were modified (`--no-recent` turns it off), so what
+  you've just worked on stands out.
 - `tint(node)` colours the start of a label in a provider's own colours (a date, a time).
 
 `python3 -m unittest test_treecanvas` runs the tests.

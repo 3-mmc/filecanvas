@@ -820,3 +820,37 @@ fc.pick('', provider=p, backdrop='off', ease=1, glyphs='plain')
             if proc.poll() is None:
                 proc.kill()
             os.close(master)
+
+
+class Glow(unittest.TestCase):
+    def test_what_changed_lately_glows_and_fades_in_steps(self):
+        import time
+        self.assertEqual(fc.glowing(5), (0.9, 600))
+        self.assertEqual(fc.glowing(2 * 3600), (0.5, 6 * 3600))
+        self.assertEqual(fc.glowing(30 * 86400), (0.0, None))
+        d = tempfile.mkdtemp()
+        now = time.time()
+        for name, age in (('fresh', 60), ('lastweek', 6 * 86400), ('old', 90 * 86400)):
+            with open(os.path.join(d, name), 'w'):
+                pass
+            os.utime(os.path.join(d, name), (now - age, now - age))
+        c = fc.Canvas(d, options(color='truecolor', ls_colors=False, git=False, start=d))
+        press(c, 'right', 'down', 'down')                              # the choice on 'old': the others drawn plain
+        c.wall = lambda: now
+        lines, _ = c.frame(100, 20, animate=True)
+        due = c.due()
+        real = c.source.glow
+        c.source.glow = lambda node: None
+        bare, _ = c.frame(100, 20, animate=True)
+        c.source.glow = real
+        def row(ls, name):              # the colour the name itself is drawn in
+            line = next(l for l in ls if name in ANSI.sub('', l))
+            return re.findall(r'\x1b\[[0-9;]*m', line[:line.index(name)])[-1]
+        self.assertNotEqual(row(lines, 'fresh'), row(bare, 'fresh'))   # tinted
+        self.assertNotEqual(row(lines, 'lastweek'), row(bare, 'lastweek'))
+        self.assertEqual(row(lines, 'old'), row(bare, 'old'))          # long ago: as it was
+        self.assertTrue(0 < due <= 600 - 60 + 1)                       # woken by fresh's step down at 10 min, or sooner
+        fc.FileSystem(recent=False)                                    # off (--no-recent): no glow at all
+        c = fc.Canvas(d, options(color='truecolor', ls_colors=False, git=False, start=d, recent=False))
+        press(c, 'right')
+        self.assertIsNone(c.source.glow(c.focus))
