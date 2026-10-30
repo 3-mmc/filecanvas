@@ -1,6 +1,6 @@
 # msgcanvas
 
-Mail and chat on one canvas you move across: accounts branch into folders (their unread counts
+Mail, chat and your calendar on one canvas you move across: accounts branch into folders (their unread counts
 in a column of their own), folders into groups (by date: Today, Yesterday, This week, Last week,
 Earlier this month, each month, each year; or by sender; or none: **⌃L** switches, and it's
 remembered; and before that, if you like, split in two: **⌃T** puts Unread apart from Read, then
@@ -58,6 +58,15 @@ server keeps everything. `0` keeps it all.
 
 Passwords are `pass` entries (`mail/<name>`); OAuth tokens are gpg-encrypted files under
 `~/.local/share/msgcanvas/tokens/`, kept fresh by neomutt's `mutt_oauth2.py`.
+
+## Calendar
+
+Your calendar beside mail and chats (or alone: `msgcanvas cal [YYYY-MM]`): it's
+[calcanvas](https://github.com/3-mmc/calcanvas)'s, vendored (`tools/vendor-calcanvas.py`), with
+the same calendars, feeds (`calcanvas add`) and what-ifs. Months open on today, days as
+`30 Fri  …` in their month's colour (a shade per week); multi-day things are eras holding what
+happens in them; clashes fork a day, and **⌃W** what if… forks one yourself, **⌃K** keeps one.
+See calcanvas's README for all of it.
 
 ## Chats
 
