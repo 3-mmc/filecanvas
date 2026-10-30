@@ -61,6 +61,12 @@ class Together(fc.Provider):
     def preview_end(self, node):
         return self.ask('preview_end', node, False)
 
+    def actions(self, node):
+        return self.ask('actions', node, [])
+
+    def act(self, node, name, canvas):
+        return self.ask('act', node, None, name, canvas)
+
     def busy(self):
         return any(p.busy() for p in self.providers)
 

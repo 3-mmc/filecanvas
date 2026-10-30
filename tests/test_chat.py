@@ -152,6 +152,21 @@ class Live(unittest.TestCase):
         self.assertIn('nchat', both.preview(kids[1]))
 
 
+class TogetherPassesActionsOn(unittest.TestCase):
+    def test_each_nodes_own_provider_has_its_keys(self):
+        class Writes(Mailish):
+            def actions(self, node):
+                return [('\x0e', 'new', '⌃N new')]
+
+            def act(self, node, name, canvas):
+                canvas.say(f'{name} on {node.name}')
+        both = together.Together([Writes({}), Mailish({})])
+        c = fc.Canvas('', options(both))
+        self.assertIn('⌃N new', screen(c)[-1])
+        press(c, '\x0e')
+        self.assertIn('new on home', screen(c)[-2])
+
+
 class Mailish(fc.Tree):
     """Stands in for the mail provider: one account."""
     KINDS = ('account',)
