@@ -40,7 +40,7 @@ Python 3, no dependencies. Linux, macOS, WSL.
 | `--theme NAME` | powerline | `powerline` (powerline-shell's default), `amber` (cdeck's), `nord`, `gruvbox`, `solarized-dark`, or a `.json` file |
 | `--glyphs` | powerline | `powerline` needs a powerline font, `round` a Nerd Font, `plain` nothing |
 | `--color` | auto | `truecolor` or `256`; auto uses 256 inside tmux unless `COLORTERM=truecolor` |
-| `--[no-]ls-colors` | theme | colour entries from `LS_COLORS`; `amber` turns it off by default, the rest on |
+| `--[no-]ls-colors` | on | colour entries as `ls` does, from `LS_COLORS` (or `ls`'s own when it isn't set) |
 | `--[no-]git` | on | mark changed entries and show the branch |
 | `--dead F` | 0.3 | camera dead zone as a fraction of the view; `0` keeps the selection centred |
 | `--across F` | 0.4 | where the selection sits across the view, 0..1 |

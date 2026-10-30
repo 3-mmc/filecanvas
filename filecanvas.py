@@ -58,7 +58,7 @@ THEMES = {
         'home_bg': 214, 'home_fg': 232, 'seg_bg': 94, 'seg_fg': 222, 'cwd_fg': 230, 'sep_fg': 172,
         'repo_clean_bg': 136, 'repo_clean_fg': 232, 'repo_dirty_bg': 166, 'repo_dirty_fg': 232,
         'git_dirty': 166, 'git_staged': 142, 'git_untracked': 137, 'git_conflict': 196,
-        'rest': 246, 'ghost': 237, 'ls_colors': False,
+        'rest': 246, 'ghost': 237, 'ls_colors': True,
         'person_fg': 230, 'person0': 94, 'person1': 130, 'person2': 58, 'person3': 95, 'person4': 23, 'person5': 88,
     },
     'nord': {
@@ -221,9 +221,17 @@ def truecolor_terminal():
 
 
 def ls_colors():
-    """LS_COLORS as {key: (colour, bold)}: 'di', 'ln', 'ex', … and '*.ext' (lower-cased)."""
+    """LS_COLORS as {key: (colour, bold)}: 'di', 'ln', 'ex', … and '*.ext' (lower-cased). Without
+    it (a program started outside your shell), the colours `ls` itself would use: dircolors's."""
     out = {}
-    for item in os.environ.get('LS_COLORS', '').split(':'):
+    spec = os.environ.get('LS_COLORS', '')
+    if not spec and shutil.which('dircolors'):
+        try:
+            said = subprocess.run(['dircolors', '-b'], capture_output=True, text=True, timeout=2).stdout
+            spec = said.split("'")[1] if "'" in said else ''
+        except (OSError, subprocess.SubprocessError, IndexError):
+            spec = ''
+    for item in spec.split(':'):
         key, _, value = item.partition('=')
         if not key or not value:
             continue
