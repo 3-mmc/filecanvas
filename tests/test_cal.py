@@ -196,6 +196,23 @@ class Canvas(unittest.TestCase):
                              now=dt.datetime(2026, 10, 31, 20, 30, tzinfo=NY))
         self.assertEqual(later.soon(later.by_day[dt.date(2026, 10, 31)][0]), 'in 30m')
 
+    def test_it_wakes_when_a_countdown_ticks_over_and_sleeps_otherwise(self):
+        at = lambda when: cal.Calendar(os.path.join(self.home, 'calendars'), self.plans, watch=0, now=when)
+        p = at(dt.datetime(2026, 10, 31, 20, 29, 30, tzinfo=NY))          # Maria's at 21:00: 'in 30m'
+        maria = p.by_day[dt.date(2026, 10, 31)][0]
+        self.assertEqual(p.soon(maria), 'in 30m')
+        self.assertEqual(dt.datetime.fromtimestamp(p.next_change(), NY), dt.datetime(2026, 10, 31, 20, 30, tzinfo=NY))
+        p = at(dt.datetime(2026, 10, 31, 17, 15, tzinfo=NY))                # 'in 3h': it turns 'in 2h' at 18:00
+        self.assertEqual(dt.datetime.fromtimestamp(p.next_change(), NY), dt.datetime(2026, 10, 31, 18, 0, tzinfo=NY))
+        p = at(dt.datetime(2026, 11, 20, 9, 0, tzinfo=NY))                  # the flight on the 23rd, 11:50: close
+        self.assertEqual(dt.datetime.fromtimestamp(p.next_change(), NY),    # two days before, 11:50 on the 21st
+                         dt.datetime(2026, 11, 21, 0, 0, tzinfo=NY))         # (midnight comes first)
+        p = at(dt.datetime(2026, 11, 21, 9, 0, tzinfo=NY))
+        self.assertEqual(dt.datetime.fromtimestamp(p.next_change(), NY), dt.datetime(2026, 11, 21, 11, 50, tzinfo=NY))
+        self.assertEqual(p.close(), frozenset())
+        p.fixed_now = dt.datetime(2026, 11, 21, 11, 51, tzinfo=NY)
+        self.assertEqual(p.close(), frozenset({'fly'}))                    # in: its label is made again
+
     def test_a_span_is_an_era_holding_what_happens_in_it(self):
         self.press('up')                # onto Tomasz in London
         era = self.c.focus

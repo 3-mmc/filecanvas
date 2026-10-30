@@ -399,7 +399,35 @@ class Calendar(fc.Provider):
                     sig.append((f, os.stat(f).st_mtime_ns))
                 except OSError:
                     pass
-        return sig, self.now().replace(minute=0, second=0, microsecond=0)    # hourly: what's close moves
+        return sig, self.today(), self.close()      # a new day, or something coming close: labels move
+
+    def near(self):
+        """Your timed events from yesterday to three days on: those a countdown can be about."""
+        today = self.today()
+        return [e for d in range(-1, 4) for e in self.by_day.get(today + d * DAY, ())
+                if not all_day(e.start) and e.calendar not in self.quiet]
+
+    def close(self):
+        """Which events are close now: their time leads their label, so when this changes, the
+        labels are made again."""
+        return frozenset(e.uid for e in self.near() if self.soon(e))
+
+    def next_change(self):
+        """When a countdown in the column next ticks over ('in 31m' to 'in 30m', 'in 3h' to 'in
+        2h'), something ends or comes within two days, or the day turns: the canvas draws then,
+        and sleeps till then."""
+        now = self.now()
+        at = [dt.datetime.combine(now.date() + DAY, dt.time(), self.zone)]
+        for e in self.near():
+            left = e.start - now
+            if dt.timedelta() < left <= SOON:
+                step = 60 if left < dt.timedelta(hours=1) else 3600
+                at.append(now + dt.timedelta(seconds=left.total_seconds() % step or step))
+            elif left > SOON:
+                at.append(e.start - SOON)
+            elif now < e.end:
+                at.append(e.end)
+        return min(at).timestamp()
 
     def watch(self, every):
         seen = self.signature()

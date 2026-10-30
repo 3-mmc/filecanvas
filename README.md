@@ -18,7 +18,8 @@ It opens on this month, at today. Months branch into what's on them, each day as
 its number and weekday in its month's colour (October orange, December teal…), each week a shade
 of it. A day with one thing is that thing (its time in a column of their own), a day with more
 opens into them. Each thing opens onto when, where, and what it says. Within two days, a thing's
-time moves to the front and the column says how long until it (`in 3h`, `tomorrow`, `now`).
+time moves to the front and the column says how long until it (`in 3h`, `tomorrow`, `now`),
+ticking over the moment it changes: the canvas sleeps until then, drawing nothing in between.
 
 What runs over days (a trip, a visit) is a bar in its own colour among the days it starts on, and
 an era: it opens onto what happens within it, eras inside it too, and while you're in one it says
