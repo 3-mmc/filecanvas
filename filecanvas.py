@@ -845,7 +845,7 @@ def shell_word(path, fish=False):
 INIT = {
     'bash': '''# filecanvas: `@CMD@ [FOLDER]` goes to a folder you choose on the canvas;@KEYDOC@
 if ! type -t @CMD@ >/dev/null 2>&1 || [[ $(declare -f @CMD@ 2>/dev/null) == *filecanvas* ]]; then
-    @CMD@() { local p; p=$(@RUN@ --dirs-only --print absolute "${1:-.}") && builtin cd -- "$p"; : filecanvas; }
+    @CMD@() { local p; p=$(@RUN@ --dirs-only --on-start --print absolute "${1:-.}") && builtin cd -- "$p"; : filecanvas; }
 else
     echo "filecanvas: @CMD@ is already a command here, so it's left alone (--cmd NAME picks another)" >&2
 fi
@@ -860,7 +860,7 @@ if not type -q @CMD@; or functions @CMD@ 2>/dev/null | string match -q '*filecan
     function @CMD@ --description 'cd to a folder chosen on the canvas (filecanvas)'
         set -l start .
         set -q argv[1]; and set start $argv[1]
-        set -l p (@RUN@ --dirs-only --print absolute $start | string collect); and builtin cd -- $p
+        set -l p (@RUN@ --dirs-only --on-start --print absolute $start | string collect); and builtin cd -- $p
     end
 else
     echo "filecanvas: @CMD@ is already a command here, so it's left alone (--cmd NAME picks another)" >&2
@@ -872,7 +872,7 @@ end
 @BIND@''',
     'zsh': '''# filecanvas: `@CMD@ [FOLDER]` goes to a folder you choose on the canvas;@KEYDOC@
 if (( ! $+commands[@CMD@] && ! $+aliases[@CMD@] && ! $+builtins[@CMD@] )) && [[ -z ${functions[@CMD@]} || ${functions[@CMD@]} == *filecanvas* ]]; then
-    @CMD@() { local p; p=$(@RUN@ --dirs-only --print absolute "${1:-.}") && builtin cd -- "$p"; : filecanvas }
+    @CMD@() { local p; p=$(@RUN@ --dirs-only --on-start --print absolute "${1:-.}") && builtin cd -- "$p"; : filecanvas }
 else
     print -u2 "filecanvas: @CMD@ is already a command here, so it's left alone (--cmd NAME picks another)"
 fi

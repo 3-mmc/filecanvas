@@ -69,8 +69,9 @@ defaults; every setting works with every theme.
 
 ## In your shell
 
-`cdi [FOLDER]` goes to a folder you choose on the canvas (Enter goes there, Esc stays put), and
-⌃T puts a chosen path in at the cursor, quoted. Add one line to your shell's rc file:
+`cdi [FOLDER]` goes to a folder you choose on the canvas. It opens on the folder you're in (or
+FOLDER), what's in it beside; Enter goes to the folder you're on, Esc stays put. ⌃T puts a chosen
+path in at the cursor, quoted. Add one line to your shell's rc file:
 
 ```bash
 eval "$(python3 /path/to/filecanvas.py --init bash)"      # ~/.bashrc
