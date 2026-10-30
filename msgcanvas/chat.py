@@ -6,7 +6,7 @@ save a message's file (fetching it first).
 nchat runs as a child, `nchat --serve`, speaking JSON lines (nchat's doc/serve.md): requests go
 in, replies and events come out. Everything it says is kept here, by profile, chat and message
 id, and the canvas is invalidated where it changed. Nothing is marked read yet."""
-import json, os, subprocess, threading, time, zlib
+import datetime, json, os, subprocess, threading, time, zlib
 
 from . import files, treecanvas as fc
 from .mail import SEP
@@ -52,6 +52,7 @@ class Profile:
         self.wanted = {}            # (chat, message): what to do with its file once it's downloaded
         self.fetching = set()       # (chat, message): pictures asked for, to show
         self.colours = {}           # chat: {sender: n}, person n's colour, in the order they first wrote
+        self.presence = {}          # user: (online, last seen: epoch ms, or nchat's -1 / 1 / 2)
 
     def who(self, user):
         """A person's name: from contacts, else their own chat's (a one-to-one chat has their id),
@@ -258,6 +259,9 @@ class Serve:
                 return [node]
             p.chats.pop(chat, None)
             return [top]
+        if kind == 'status':          # someone's online, or when they were last
+            p.presence[e.get('user')] = (bool(e.get('online')), e.get('last_seen', -1))
+            return [chat_id(p.id, e.get('user'))]
         if kind == 'typing':
             who = p.typing.setdefault(chat, set())
             (who.add if e.get('typing') else who.discard)(e.get('user'))
@@ -292,6 +296,45 @@ def stamp(seconds, now=None):
 
 def profile_id(profile):
     return '/@' + profile
+
+
+def ago(t, now):
+    """How long ago `t` was (epoch seconds), short: 'now', '4m', '2h', then 'yesterday', a weekday
+    within the week, else '3 Oct'."""
+    age = now - t
+    if age < 60:
+        return 'now'
+    if age < 3600:
+        return f'{int(age // 60)}m'
+    if age < 86400:
+        return f'{int(age // 3600)}h'
+    days = (datetime.date.fromtimestamp(now) - datetime.date.fromtimestamp(t)).days
+    if days <= 1:
+        return 'yesterday'
+    then = datetime.date.fromtimestamp(t)
+    return f'{then:%a}' if days < 7 else f'{then.day} {then:%b}'
+
+
+def ago_changes(t, now):
+    """When ago(t) next reads differently: the next minute, hour, or midnight it turns over."""
+    age = now - t
+    if age < 3600:
+        return t + (int(max(age, 0) // 60) + 1) * 60
+    if age < 86400:
+        return t + (int(age // 3600) + 1) * 3600
+    tomorrow = datetime.date.fromtimestamp(now) + datetime.timedelta(days=1)
+    return time.mktime(tomorrow.timetuple())
+
+
+def seen_text(presence, now):
+    """'online', 'seen 5m ago', 'seen last week'…; None when it isn't known."""
+    if not presence:
+        return None
+    online, seen = presence
+    if online:
+        return 'online'
+    return {1: 'seen last month', 2: 'seen last week'}.get(seen) or \
+        (f'seen {ago(seen / 1000, now)}' + (' ago' if ago(seen / 1000, now)[-1] in 'mh' else '') if seen > 2 else None)
 
 
 def pinned_id(profile_path):
@@ -472,7 +515,13 @@ class Chat(fc.Provider):
         return ('dir', True) if self.unread(node) else None
 
     def count(self, node):
-        """How many chats are pinned: those with something unread, standing out."""
+        """How long since a chat last heard anything ('4m', '2h', 'yesterday', 'Tue', '3 Oct'), bold
+        if it's unread; how many chats are pinned, those with something unread standing out."""
+        if node.kind == 'chat':
+            c = self.chat(node)
+            t = c.get('last_message_time', -1)
+            return (ago(t / 1000, time.time()), 'git_dirty' if c.get('unread') else 'stub', bool(c.get('unread'))) \
+                if t > 0 else None
         if node.kind != 'pinned':
             return None
         chats = self.pinned_chats(node)
@@ -505,6 +554,17 @@ class Chat(fc.Provider):
 
     def width(self, node):
         return MESSAGE_WIDTH if node.kind == 'chat-message' else None
+
+    def next_change(self):
+        """When the next 'how long ago' turns over (a chat's, or the last seen of who you're with)."""
+        now, got = time.time(), []
+        for p in self.serve.profiles.values():
+            with self.serve.lock:
+                times = [c.get('last_message_time', -1) for c in p.chats.values()]
+                if self.looking and self.looking[0] == p.id:
+                    times.append((p.presence.get(self.looking[1]) or (0, -1))[1])
+            got += [ago_changes(t / 1000, now) for t in times if t > 2]
+        return min(got) if got else None
 
     def beacon(self, node):
         """A chat with something unread, as a beacon from its latest message: blinking while it's
@@ -553,6 +613,10 @@ class Chat(fc.Provider):
             p, chat = node.data[:2]
             if chat in p.unsent:
                 tail.append(('⚠ ' + p.unsent[chat], 'repo_dirty_fg', 'repo_dirty_bg', False))
+            seen = seen_text(p.presence.get(chat), time.time())
+            if seen:
+                on = seen == 'online'
+                tail.append((seen, 'repo_clean_fg' if on else 'bg', 'repo_clean_bg' if on else 'filter', False))
         return segs, tail
 
     # -- the reading pane: a photo's picture
@@ -705,6 +769,8 @@ class Chat(fc.Provider):
     def focus(self, node):
         if node.kind in ('chat', 'run', 'chat-message', 'earlier'):
             p, chat = node.data[:2]
+            if self.looking != (p.id, chat):    # the chat you're in: its presence comes (WhatsApp's)
+                self.serve.request('set_current_chat', profile=p.id, chat=chat)
             self.looking = (p.id, chat)
             if node.kind == 'chat':
                 self.history(p, chat)           # ask for it now: it's there by the time you go in

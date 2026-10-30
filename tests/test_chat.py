@@ -175,6 +175,39 @@ class Events(unittest.TestCase):
         self.assertEqual(both.next_change(), 200.0)
         self.assertEqual(both.beacon(fc.Node('/x', 'x', False, None, 'fi')), 42.0)
 
+    def test_how_long_ago_short_and_when_it_turns_over(self):
+        import datetime as dt
+        now = dt.datetime(2026, 10, 30, 10, 28, 30).timestamp()
+        cases = [(now - 30, 'now', now + 30), (now - 4 * 60 - 10, '4m', now + 50), (now - 2 * 3600 - 5, '2h', now + 3595)]
+        for t, text, turns in cases:
+            self.assertEqual((chat.ago(t, now), round(chat.ago_changes(t, now))), (text, round(turns)))
+        yday = dt.datetime(2026, 10, 29, 9, 0).timestamp()
+        self.assertEqual(chat.ago(yday, now), 'yesterday')
+        self.assertEqual(chat.ago_changes(yday, now), dt.datetime(2026, 10, 31).timestamp())   # at midnight
+        self.assertEqual(chat.ago(dt.datetime(2026, 10, 27, 9).timestamp(), now), 'Tue')
+        self.assertEqual(chat.ago(dt.datetime(2026, 10, 3, 9).timestamp(), now), '3 Oct')
+        self.assertEqual(chat.seen_text((True, -1), now), 'online')
+        self.assertEqual(chat.seen_text((False, (now - 300) * 1000), now), 'seen 5m ago')
+        self.assertEqual(chat.seen_text((False, 2), now), 'seen last week')
+        self.assertIsNone(chat.seen_text((False, -1), now))
+
+    def test_presence_of_the_chat_youre_in_shows_and_it_asks_for_it(self):
+        asked = []
+        s = chat.Serve.detached()
+        s.request = lambda op, **f: asked.append((op, f.get('chat'))) or len(asked)
+        s.apply({'event': 'hello', 'profiles': [{'profile': 'W_1', 'protocol': 'WhatsAppMd', 'self': 'me', 'features': []}]})
+        s.apply({'event': 'chats', 'profile': 'W_1', 'chats': [{'id': 'ann', 'name': 'Ann', 'unread': True,
+                                                                'last_message_time': (time.time() - 125) * 1000}]})
+        c, p = chat.Chat(serve=s), s.profiles['W_1']
+        node = fc.Node(chat.chat_id('W_1', 'ann'), 'Ann', True, None, 'chat', source=c, data=(p, 'ann'))
+        self.assertEqual(c.count(node), ('2m', 'git_dirty', True))
+        c.focus(node)
+        self.assertIn(('set_current_chat', 'ann'), asked)
+        self.assertEqual(s.apply({'event': 'status', 'profile': 'W_1', 'user': 'ann', 'online': True, 'last_seen': -1}),
+                         [chat.chat_id('W_1', 'ann')])
+        self.assertIn(('online', 'repo_clean_fg', 'repo_clean_bg', False), c.bar(node, True)[1])
+        self.assertAlmostEqual(c.next_change(), time.time() - 125 + 180, delta=2)    # '2m' turns '3m'
+
     def test_a_skipped_profile_is_kept(self):
         s, _ = self.serve()
         self.assertEqual(s.skipped, [{'profile': 'Signal_+492', 'why': 'locked'}])
