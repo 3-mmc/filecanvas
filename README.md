@@ -50,6 +50,8 @@ Python 3, no dependencies. Linux, macOS, WSL.
 | `--limit N` | 0 | most children per folder, the rest as "↓ N more"; `0` shows all, trailing off screen |
 | `--[no-]peek` | off | show the selected folder's contents before opening it |
 | `--[no-]fold` | off | close a branch when you move off it |
+| `--[no-]grey-rest` | on | only the branch you're on keeps its colours; branches you're not on go grey |
+| `--backdrop` | auto | inside tmux, the screen you came from, dimmed, fills the empty space; `off` leaves it blank |
 | `--tab cycle` | branch | Tab moves down instead of opening |
 | `--dirs-only` | off | list folders only (for choosing one) |
 | `--on-start` | off | begin on the start folder itself, not inside it |
@@ -67,23 +69,21 @@ defaults; every setting works with every theme.
 
 ## In your shell
 
-bash (⌃T inserts the chosen path at the cursor; Tab is left alone):
+`cdi [FOLDER]` goes to a folder you choose on the canvas (Enter goes there, Esc stays put), and
+⌃T puts a chosen path in at the cursor, quoted. Add one line to your shell's rc file:
 
 ```bash
-_filecanvas() { local p; p=$(python3 /path/to/filecanvas.py) || return
-                READLINE_LINE=${READLINE_LINE:0:READLINE_POINT}$p${READLINE_LINE:READLINE_POINT}
-                READLINE_POINT=$((READLINE_POINT + ${#p})); }
-bind -x '"\C-t": _filecanvas'
+eval "$(python3 /path/to/filecanvas.py --init bash)"      # ~/.bashrc
+eval "$(python3 /path/to/filecanvas.py --init zsh)"       # ~/.zshrc
+python3 /path/to/filecanvas.py --init fish | source       # ~/.config/fish/config.fish
 ```
 
-zsh:
+`--cmd NAME` names the command something else, and `--key alt-f` (any `ctrl-` or `alt-` letter,
+or `none`) moves the key. If the name is already a command where you are (zoxide's
+`--cmd cd` makes a `cdi` of its own), it's left alone and the shell says so at startup.
 
-```zsh
-_filecanvas() { local p; p=$(python3 /path/to/filecanvas.py </dev/tty) && LBUFFER+=$p; zle reset-prompt }
-zle -N _filecanvas; bindkey '^T' _filecanvas
-```
-
-These snippets haven't been tried by hand yet.
+For your own scripts, `--print absolute` prints the chosen path absolute, and `--print shell`
+(or `fish`) quoted for that shell; it prints nothing and exits 1 on Esc.
 
 Started as a prototype for [cdeck](https://github.com/vmagierski/cdeck)'s folder trail.
 

@@ -10,17 +10,9 @@ in the theme's path colour; everything else dims with its distance from it.
     python3 filecanvas.py [START]          # prints the chosen path on stdout, nothing on Esc
     cd "$(python3 filecanvas.py)"
 
-Try it from a plain bash (Ctrl-T puts the chosen path in at the cursor; normal Tab untouched):
+In your shell: `cdi` goes to a folder you choose, ⌃T puts a path in at the cursor:
 
-    _filecanvas() { local p; p=$(python3 /path/to/filecanvas.py) || return
-                    READLINE_LINE=${READLINE_LINE:0:READLINE_POINT}$p${READLINE_LINE:READLINE_POINT}
-                    READLINE_POINT=$((READLINE_POINT + ${#p})); }
-    bind -x '"\\C-t": _filecanvas'
-
-or zsh:
-
-    _filecanvas() { local p; p=$(python3 /path/to/filecanvas.py </dev/tty) && LBUFFER+=$p; zle reset-prompt }
-    zle -N _filecanvas; bindkey '^T' _filecanvas
+    eval "$(python3 /path/to/filecanvas.py --init bash)"     # or zsh; fish: --init fish | source
 
 Keys: ↑↓ siblings · → or Tab open · ← parent (the branch stays open) · type to filter this
 column · Backspace unfilters · ⌃X fold everything off the current path · Enter choose · Esc.
@@ -40,6 +32,8 @@ CONFIG = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~
 #   dir / file      entries, when LS_COLORS isn't used, or has nothing for them
 #   stub            "(empty)", "↓ 12 more"   filter     the filter chip
 #   hint            the key hints            bg         what dimmed colours fade into
+#   rest            branches you're not on (--grey-rest)
+#   ghost           the screen behind, dimmed (--backdrop)
 #   home_* seg_* cwd_fg sep_fg               the path bar, as powerline-shell draws a prompt
 #   repo_clean_* repo_dirty_*                the bar's git chip
 #   git_dirty git_staged git_untracked git_conflict   the marks beside changed entries
@@ -51,7 +45,7 @@ THEMES = {
         'home_bg': 31, 'home_fg': 15, 'seg_bg': 237, 'seg_fg': 250, 'cwd_fg': 254, 'sep_fg': 244,
         'repo_clean_bg': 148, 'repo_clean_fg': 0, 'repo_dirty_bg': 161, 'repo_dirty_fg': 15,
         'git_dirty': 161, 'git_staged': 148, 'git_untracked': 130, 'git_conflict': 9,
-        'ls_colors': True,
+        'rest': 248, 'ghost': 237, 'ls_colors': True,
     },
     'amber': {  # cdeck's
         'bg': '#121212', 'sel_bg': 214, 'sel_fg': 232, 'path': 214, 'path_line': 214,
@@ -59,7 +53,7 @@ THEMES = {
         'home_bg': 214, 'home_fg': 232, 'seg_bg': 94, 'seg_fg': 222, 'cwd_fg': 230, 'sep_fg': 172,
         'repo_clean_bg': 136, 'repo_clean_fg': 232, 'repo_dirty_bg': 166, 'repo_dirty_fg': 232,
         'git_dirty': 166, 'git_staged': 142, 'git_untracked': 137, 'git_conflict': 196,
-        'ls_colors': False,
+        'rest': 246, 'ghost': 237, 'ls_colors': False,
     },
     'nord': {
         'bg': '#2e3440', 'sel_bg': '#88c0d0', 'sel_fg': '#2e3440', 'path': '#88c0d0',
@@ -69,7 +63,8 @@ THEMES = {
         'cwd_fg': '#eceff4', 'sep_fg': '#4c566a',
         'repo_clean_bg': '#a3be8c', 'repo_clean_fg': '#2e3440', 'repo_dirty_bg': '#bf616a',
         'repo_dirty_fg': '#eceff4', 'git_dirty': '#d08770', 'git_staged': '#a3be8c',
-        'git_untracked': '#b48ead', 'git_conflict': '#bf616a', 'ls_colors': True,
+        'git_untracked': '#b48ead', 'git_conflict': '#bf616a',
+        'rest': '#a7adba', 'ghost': '#434c5e', 'ls_colors': True,
     },
     'gruvbox': {
         'bg': '#282828', 'sel_bg': '#fabd2f', 'sel_fg': '#282828', 'path': '#fabd2f',
@@ -79,7 +74,8 @@ THEMES = {
         'cwd_fg': '#fbf1c7', 'sep_fg': '#7c6f64',
         'repo_clean_bg': '#98971a', 'repo_clean_fg': '#282828', 'repo_dirty_bg': '#cc241d',
         'repo_dirty_fg': '#ebdbb2', 'git_dirty': '#fe8019', 'git_staged': '#b8bb26',
-        'git_untracked': '#d3869b', 'git_conflict': '#fb4934', 'ls_colors': True,
+        'git_untracked': '#d3869b', 'git_conflict': '#fb4934',
+        'rest': '#a89984', 'ghost': '#504945', 'ls_colors': True,
     },
     'solarized-dark': {
         'bg': '#002b36', 'sel_bg': '#268bd2', 'sel_fg': '#fdf6e3', 'path': '#93a1a1',
@@ -89,7 +85,8 @@ THEMES = {
         'cwd_fg': '#eee8d5', 'sep_fg': '#586e75',
         'repo_clean_bg': '#859900', 'repo_clean_fg': '#002b36', 'repo_dirty_bg': '#dc322f',
         'repo_dirty_fg': '#fdf6e3', 'git_dirty': '#cb4b16', 'git_staged': '#859900',
-        'git_untracked': '#6c71c4', 'git_conflict': '#dc322f', 'ls_colors': True,
+        'git_untracked': '#6c71c4', 'git_conflict': '#dc322f',
+        'rest': '#839496', 'ghost': '#073642', 'ls_colors': True,
     },
 }
 
@@ -484,6 +481,7 @@ class Canvas:
             self.focus = node if opts.on_start and not typed or not node.shown() else node.shown()[0]
         else:
             self.focus = node
+        self.backdrop = opts.backdrop if isinstance(opts.backdrop, dict) else {}
         self.cam = None       # (x, y) world position of the top-left corner, floats
         self.target = None
 
@@ -679,11 +677,14 @@ class Canvas:
                     cur += 1
                 s = 1.0
             else:
-                if id(n) in path:
-                    style, s = P.fg('path', 1, True), 1.0
+                if id(n) in path:  # the way you came: its own colours with --grey-rest, else the path's
+                    c, bold = self.colour(n) if o.grey_rest else ('path', True)
+                    style, s = P.fg(c, 1, True), 1.0
                 else:
                     s = strength(n)
                     c, bold = self.colour(n)
+                    if o.grey_rest and n.parent is not self.focus.parent and n.parent is not self.focus:
+                        c, bold = 'rest', False   # a branch you're not on
                     style = P.fg(c, s, bold)
                 put(x, n.row, text, style)
                 cur = x + cells(text)
@@ -716,6 +717,7 @@ class Canvas:
                 for k in kids:
                     put(spine + 1, k.row, '─', lit if chosen is k else line)
 
+        self.backdrop_under(grid, 1 if o.header else 0)
         lines = [o.header(w)] if o.header else []
         for row in grid:
             s, cur = [], None
@@ -731,6 +733,25 @@ class Canvas:
             hint = '↑↓ move  →/tab open  ← parent  type filter  ⌃X fold  ⏎ choose  esc cancel'
             lines.append(P.fg('hint') + hint[:w - 1] + '\033[0m')
         return lines, (ox, oy) != (round(tx), round(ty)) or bool(self.git.pending)
+
+    def backdrop_under(self, grid, top):
+        """The screen behind (self.backdrop, {(row, col): char}), dimmed, in the grid's empty cells
+        that have an empty cell either side, so what's drawn stays clear of it."""
+        if not self.backdrop:
+            return
+        ghost = self.paint.fg('ghost')
+        w = len(grid[0]) if grid else 0
+
+        drawn = {(y, x) for y, row in enumerate(grid) for x, cell in enumerate(row) if cell != (' ', '')}
+        for (y, x), ch in self.backdrop.items():
+            y -= top
+            if not 0 <= y < len(grid):
+                continue
+            row, wide = grid[y], cells(ch) == 2
+            if not any((y, c) in drawn for c in range(x - 1, x + (3 if wide else 2))) and 0 <= x and x + wide < w:
+                row[x] = (ch, ghost)
+                if wide:
+                    row[x + 1] = ('', ghost)
 
     def bar(self, w):
         """The chosen path as powerline-shell draws a prompt: ~ in its own chip, then the rest."""
@@ -803,6 +824,90 @@ def display(path):
     return path
 
 
+def shell_word(path, fish=False):
+    """`path` for a shell command line: as display() writes it, quoted, a leading ~/ left to expand.
+    Fish's single quotes take \\ and \\' as escapes, so it gets its own quoting."""
+    import re, shlex
+
+    def quote(text):
+        if fish:
+            return text if re.fullmatch(r'[\w@%+=:,./-]+', text) else \
+                "'" + text.replace('\\', '\\\\').replace("'", "\\'") + "'"
+        return shlex.quote(text)
+    shown = display(path)
+    if shown == '~':
+        return '~'
+    if shown.startswith('~/'):
+        return '~/' + (quote(shown[2:]) if shown[2:] else '')
+    return quote(shown)
+
+
+INIT = {
+    'bash': '''# filecanvas: `@CMD@ [FOLDER]` goes to a folder you choose on the canvas;@KEYDOC@
+if ! type -t @CMD@ >/dev/null 2>&1 || [[ $(declare -f @CMD@ 2>/dev/null) == *filecanvas* ]]; then
+    @CMD@() { local p; p=$(@RUN@ --dirs-only --print absolute "${1:-.}") && builtin cd -- "$p"; : filecanvas; }
+else
+    echo "filecanvas: @CMD@ is already a command here, so it's left alone (--cmd NAME picks another)" >&2
+fi
+_filecanvas_insert() {
+    local p; p=$(@RUN@ --print shell) || return
+    READLINE_LINE=${READLINE_LINE:0:READLINE_POINT}$p${READLINE_LINE:READLINE_POINT}
+    READLINE_POINT=$((READLINE_POINT + ${#p}))
+}
+@BIND@''',
+    'fish': '''# filecanvas: `@CMD@ [FOLDER]` goes to a folder you choose on the canvas;@KEYDOC@
+if not type -q @CMD@; or functions @CMD@ 2>/dev/null | string match -q '*filecanvas*'
+    function @CMD@ --description 'cd to a folder chosen on the canvas (filecanvas)'
+        set -l start .
+        set -q argv[1]; and set start $argv[1]
+        set -l p (@RUN@ --dirs-only --print absolute $start | string collect); and builtin cd -- $p
+    end
+else
+    echo "filecanvas: @CMD@ is already a command here, so it's left alone (--cmd NAME picks another)" >&2
+end
+function _filecanvas_insert --description 'put a path chosen on the canvas in at the cursor (filecanvas)'
+    set -l p (@RUN@ --print fish | string collect); and commandline -i -- $p
+    commandline -f repaint
+end
+@BIND@''',
+    'zsh': '''# filecanvas: `@CMD@ [FOLDER]` goes to a folder you choose on the canvas;@KEYDOC@
+if (( ! $+commands[@CMD@] && ! $+aliases[@CMD@] && ! $+builtins[@CMD@] )) && [[ -z ${functions[@CMD@]} || ${functions[@CMD@]} == *filecanvas* ]]; then
+    @CMD@() { local p; p=$(@RUN@ --dirs-only --print absolute "${1:-.}") && builtin cd -- "$p"; : filecanvas }
+else
+    print -u2 "filecanvas: @CMD@ is already a command here, so it's left alone (--cmd NAME picks another)"
+fi
+_filecanvas_insert() { local p; p=$(@RUN@ --print shell) && LBUFFER+=$p; zle reset-prompt }
+zle -N _filecanvas_insert
+@BIND@''',
+}
+
+
+def init(shell, cmd='cdi', key='ctrl-t', run=None):
+    """The lines for a shell's rc file: `cmd` and, unless key is 'none', a key that inserts a path."""
+    import re, shlex
+    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_-]*', cmd):
+        sys.exit(f'filecanvas: {cmd!r} is not a command name')
+    run = run or shlex.join([sys.executable, os.path.abspath(__file__)])
+    bind, doc = '', ''
+    m = re.fullmatch(r'(ctrl|alt)-([a-z])', key.lower())
+    if m:
+        mod, letter = m.groups()
+        doc = f' {key} puts a path in at the cursor.'
+        if shell == 'bash':
+            seq = ('\\C-' if mod == 'ctrl' else '\\e') + letter
+            bind = "bind -x '\"" + seq + "\": _filecanvas_insert'"
+        elif shell == 'fish':
+            seq = ('\\c' if mod == 'ctrl' else '\\e') + letter   # in vi mode too
+            bind = f"bind {seq} _filecanvas_insert\nbind -M insert {seq} _filecanvas_insert"
+        else:
+            seq = '^' + letter.upper() if mod == 'ctrl' else '^[' + letter
+            bind = "bindkey '" + seq + "' _filecanvas_insert"
+    elif key != 'none':
+        sys.exit(f"filecanvas: --key takes ctrl-<letter>, alt-<letter> or none, not {key!r}")
+    return (INIT[shell].replace('@CMD@', cmd).replace('@RUN@', run).replace('@BIND@', bind)
+            .replace('@KEYDOC@', doc).rstrip() + '\n')
+
+
 def keys(data):
     seq = {'\x1b[A': 'up', '\x1b[B': 'down', '\x1b[C': 'right', '\x1b[D': 'left',
            '\x1bOA': 'up', '\x1bOB': 'down', '\x1bOC': 'right', '\x1bOD': 'left', '\x1b[Z': 'backtab'}
@@ -843,8 +948,30 @@ def apply(c, k, opts):
     return None
 
 
+def capture():
+    """{(row, col): char} of the tmux pane we're in, as it is now; {} outside tmux."""
+    pane = os.environ.get('TMUX_PANE')
+    if not (pane and os.environ.get('TMUX')):
+        return {}
+    try:
+        text = subprocess.run(['tmux', 'capture-pane', '-p', '-t', pane], capture_output=True,
+                              text=True, timeout=2).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    out = {}
+    for y, line in enumerate(text.split('\n')):
+        x = 0
+        for ch in line:
+            if not ch.isspace() and ch.isprintable():
+                out[(y, x)] = ch
+            x += cells(ch)
+    return out
+
+
 def run(opts):
     """Draw the canvas on the terminal until Enter (the chosen path, absolute) or Esc (None)."""
+    if opts.backdrop == 'auto':
+        opts.backdrop = capture()
     c = Canvas(opts.start, opts)
     tty = open('/dev/tty', 'r+b', buffering=0)
     fd = tty.fileno()
@@ -950,11 +1077,24 @@ def parser():
     a.add_argument('--fold', action=argparse.BooleanOptionalAction, default=False,
                    help='close a branch when you move off it (classic tree)')
     a.add_argument('--tab', choices=('branch', 'cycle'), default='branch', help='Tab opens (branch) or moves down (cycle)')
+    a.add_argument('--print', choices=('display', 'absolute', 'shell', 'fish'), default='display', dest='print_as',
+                   help='how to print the choice: from here or ~ (display), absolute, or quoted for '
+                        'bash/zsh (shell) or fish')
+    a.add_argument('--init', choices=tuple(INIT), help='print the lines for your shell\'s rc file: '
+                   'eval "$(python3 filecanvas.py --init bash)" (or zsh); in fish, '
+                   'python3 filecanvas.py --init fish | source')
+    a.add_argument('--cmd', default='cdi', help='the name --init gives the cd command (cdi)')
+    a.add_argument('--key', default='ctrl-t', help='the key --init binds to put a path in at the cursor: '
+                   'ctrl-<letter>, alt-<letter> or none (ctrl-t)')
     a.add_argument('--keys', help=argparse.SUPPRESS)
     a.add_argument('--size', default='120x36', help=argparse.SUPPRESS)
     a.add_argument('--raw', action='store_true', help=argparse.SUPPRESS)
     a.add_argument('--dirs-only', action='store_true', help='folders only (for choosing one)')
     a.add_argument('--on-start', action='store_true', help='begin on the start folder itself, not inside it')
+    a.add_argument('--grey-rest', action=argparse.BooleanOptionalAction, default=True,
+                   help="only the branch you're on keeps its colours; the rest go grey (on)")
+    a.add_argument('--backdrop', choices=('auto', 'off'), default='auto',
+                   help='the screen behind, dimmed, in the empty space (inside tmux) (auto)')
     return a
 
 
@@ -997,13 +1137,17 @@ def pick(start='.', skip=(), defaults=None, **settings):
 
 def main(argv=None):
     opts = options(sys.argv[1:] if argv is None else argv)
+    if opts.init:
+        print(init(opts.init, opts.cmd, opts.key), end='')
+        return
     if opts.keys is not None:
         dump(opts)
         return
     chosen = run(opts)
     if chosen is None:
         sys.exit(1)
-    print(display(chosen))
+    print(chosen if opts.print_as == 'absolute' else shell_word(chosen, opts.print_as == 'fish')
+          if opts.print_as in ('shell', 'fish') else display(chosen))
 
 
 if __name__ == '__main__':
