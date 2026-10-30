@@ -112,6 +112,8 @@ class Configs(unittest.TestCase):
         self.assertEqual([a.name for a in made], ['home', 'uni', 'cz'])
         sync = open(accounts.MBSYNCRC).read()
         self.assertIn('PassCmd "pass show mail/home"', sync)
+        self.assertIn('AuthMechs PLAIN LOGIN', sync[:sync.index('IMAPAccount uni')])
+        self.assertIn('"!Kalender" "!Kalender/*"', sync)
         self.assertIn('Patterns * "![Gmail]/All Mail" "![Gmail]/Important"', sync)
         self.assertIn('Sync Pull', sync)
         self.assertEqual(sync.count('MaxMessages 500'), 2)          # cz keeps everything
@@ -282,6 +284,9 @@ class Helpers(unittest.TestCase):
         self.assertEqual(mail.who('"Lee, Ann" <ann@x.org>'), 'Lee, Ann')
         self.assertEqual(mail.who('bo@x.org'), 'bo')
         self.assertEqual(mail.folder_name('[Gmail]/Sent Mail'), 'Sent Mail')
+        folders = ['Junk-E-Mail', 'Archiv', 'Gesendete Elemente', 'Zeug', 'INBOX', 'Entwürfe', 'Koš']
+        self.assertEqual(sorted(folders, key=mail.folder_rank),
+                         ['INBOX', 'Gesendete Elemente', 'Entwürfe', 'Archiv', 'Junk-E-Mail', 'Koš', 'Zeug'])
         self.assertEqual(mail.quote('a "b"'), '"a ""b"""')
 
 

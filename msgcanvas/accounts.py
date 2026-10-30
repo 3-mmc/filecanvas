@@ -27,8 +27,13 @@ PRESETS = {
     'gmail': dict(imap_host='imap.gmail.com', smtp_host='smtp.gmail.com', smtp_port=587,
                   # All Mail and Important repeat every other folder; notmuch would only dedupe them
                   patterns='* "![Gmail]/All Mail" "![Gmail]/Important"'),
+    # Exchange lists its calendars, contacts, notes and tasks as folders too (in English or German)
     'outlook': dict(imap_host='outlook.office365.com', smtp_host='smtp.office365.com', smtp_port=587,
-                    auth='microsoft'),
+                    auth='microsoft', patterns='* ' + ' '.join(f'"!{f}" "!{f}/*"' for f in (
+                        'Calendar', 'Contacts', 'Notes', 'Tasks', 'Journal', 'Conversation History',
+                        'Sync Issues', 'RSS Feeds', 'RSS Subscriptions', 'Outbox', 'Kalender', 'Kontakte',
+                        'Notizen', 'Aufgaben', 'Verlauf der Unterhaltung', 'Synchronisierungsprobleme',
+                        'RSS-Feeds', 'Postausgang'))),
     'seznam': dict(imap_host='imap.seznam.cz', smtp_host='smtp.seznam.cz', smtp_port=465),
     'yahoo': dict(imap_host='imap.mail.yahoo.com', smtp_host='smtp.mail.yahoo.com', smtp_port=465),
     'imap': {},
@@ -141,8 +146,9 @@ def mbsyncrc(accounts):
                 f'PassCmd {quoted(a.secret())}',
                 'TLSType IMAPS',
                 f'CertificateFile {CERTS}']
-        if a.auth in OAUTH:
-            out.append('AuthMechs XOAUTH2')
+        # A password only ever goes as a password: with the XOAUTH2 plugin installed, mbsync
+        # would otherwise try OAuth wherever the server offers it (Seznam does) and stop.
+        out.append('AuthMechs XOAUTH2' if a.auth in OAUTH else 'AuthMechs PLAIN LOGIN')
         out += ['',
                 f'IMAPStore {a.name}-far', f'Account {a.name}', '',
                 f'MaildirStore {a.name}-near',

@@ -9,7 +9,10 @@ import notmuch2
 
 from . import filecanvas as fc
 
-ORDER = ('INBOX', 'Sent', 'Drafts', 'Archive', 'Starred', 'Junk', 'Spam', 'Trash')   # folders, first
+# Folders shown first, in this order, by the start of their name in English, German or Czech.
+ORDER = (('INBOX',), ('Sent', 'Gesendet', 'Odeslan'), ('Drafts', 'Entwürfe', 'Koncept'),
+         ('Archive', 'Archiv'), ('Starred', 'Markiert', 'S hvězdičkou'),
+         ('Junk', 'Spam', 'Nevyžádan'), ('Trash', 'Deleted', 'Gelöscht', 'Papierkorb', 'Koš'))
 SEP = '\x1f'     # in ids: between a folder and a thread, and a thread and a message
 
 
@@ -47,7 +50,8 @@ def folder_name(rel):
 
 def folder_rank(rel):
     name = folder_name(rel)
-    hit = next((i for i, o in enumerate(ORDER) if name.casefold().startswith(o.casefold())), len(ORDER))
+    hit = next((i for i, names in enumerate(ORDER)
+                if any(name.casefold().startswith(o.casefold()) for o in names)), len(ORDER))
     return hit, name.casefold()
 
 
