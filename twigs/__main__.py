@@ -64,7 +64,7 @@ def hub(start=''):
         if target:
             try:
                 found += apps.load(target)()
-            except SystemExit:           # one not set up yet says so when it's opened on its own
+            except (SystemExit, ImportError):   # one not set up yet says so when it's opened on its own
                 continue
     if not found:
         sys.exit('twigs: nothing to show yet: `twigs apps` says what each twig needs')

@@ -173,9 +173,9 @@ class Events(unittest.TestCase):
 
             def beacon(self, node):
                 return 42.0
-        both = together.Together([Soon(None), Soon(300.0), Soon(200.0)])
+        both = together.Together([('a', Soon(None)), ('b', Soon(300.0)), ('c', Soon(200.0))])
         self.assertEqual(both.next_change(), 200.0)
-        self.assertEqual(both.beacon(fc.Node('/x', 'x', False, None, 'fi')), 42.0)
+        self.assertEqual(both.beacon(fc.Node('/x', 'x', False, None, 'fi', source=both.providers[1])), 42.0)
 
     def test_how_long_ago_short_and_when_it_turns_over(self):
         import datetime as dt
@@ -394,16 +394,21 @@ class Live(unittest.TestCase):
         second = self.start(conf)                   # the same profile, which the first has locked
         second.serve.ready.wait(10)
         self.assertEqual([k['profile'] for k in second.serve.skipped], ['Dummy_1'])
-        both = together.Together([Mailish({}), second])
+        both = together.Together([('Emails', Mailish({})), ('Messages', second)])
         kids = fc.Canvas('', options(both)).root.load()
-        self.assertEqual([k.name for k in kids], ['home', 'Dummy_1'])
-        self.assertIn('locked', both.preview(kids[1]))
+        self.assertEqual([k.name for k in kids], ['Emails', 'Messages'])      # a branch each
+        self.assertEqual([k.name for k in kids[0].load()], ['home'])
+        profiles = kids[1].load()
+        self.assertEqual([k.name for k in profiles], ['Dummy_1'])
+        self.assertIn('locked', both.preview(profiles[0]))
 
     def test_no_nchat_says_so_and_mail_stays(self):
-        both = together.Together([Mailish({}), chat.Chat(os.path.join(TMP, 'no-such-nchat'), dummy_conf('c'))])
-        kids = fc.Canvas('', options(both)).root.load()
-        self.assertEqual([k.kind for k in kids], ['account', 'broken'])
-        self.assertIn('nchat', both.preview(kids[1]))
+        both = together.Together([('Emails', Mailish({})),
+                                   ('Messages', chat.Chat(os.path.join(TMP, 'no-such-nchat'), dummy_conf('c')))])
+        emails, messages = fc.Canvas('', options(both)).root.load()
+        self.assertEqual([k.name for k in emails.load()], ['home'])           # mail stays
+        self.assertEqual(messages.load(), [])
+        self.assertIn('nchat', messages.error)                                # and Messages says why
 
 
 class TogetherPassesActionsOn(unittest.TestCase):
@@ -414,11 +419,34 @@ class TogetherPassesActionsOn(unittest.TestCase):
 
             def act(self, node, name, canvas):
                 canvas.say(f'{name} on {node.name}')
-        both = together.Together([Writes({}), Mailish({})])
+        both = together.Together([('Emails', Writes({})), ('Other', Mailish({}))])
         c = fc.Canvas('', options(both))
+        press(c, 'right')                                       # into Emails: on 'home'
         self.assertIn('⌃N new', screen(c)[-1])
         press(c, '\x0e')
         self.assertIn('new on home', screen(c)[-2])
+
+
+class TogetherInSections(unittest.TestCase):
+    def test_each_provider_a_named_branch_whose_nodes_it_answers_for(self):
+        class Desk(fc.Tree):
+            pane = False
+
+            def root(self):
+                return fc.Node('', 'desk', True, source=self, kind='root')
+
+            def children(self, node):
+                return [fc.Node('/today', 'Today', False, node, 'today')] if node.kind == 'root' else []
+
+            def label(self, node):
+                return node.name.upper()
+        both = together.Together([('Emails', Mailish({})), ('TuiDo', Desk({}))])
+        emails, tuido = fc.Canvas('', options(both)).root.load()
+        self.assertEqual((emails.name, tuido.name, emails.path, tuido.path), ('Emails', 'TuiDo', '§Emails', '§TuiDo'))
+        today = tuido.load()[0]
+        self.assertEqual((both.label(today), both.label(tuido)), ('TODAY', 'TuiDo'))   # its own words below, ours on top
+        self.assertFalse(both.pane_for(today))                  # no reading pane for one that has none
+        self.assertEqual(both.locate('')[0], [])
 
 
 class TogetherPassesEnterOn(unittest.TestCase):
@@ -429,15 +457,18 @@ class TogetherPassesEnterOn(unittest.TestCase):
             def choose(self, node):
                 self.chosen.append(node.name)
                 return fc.STAY
-        both = together.Together([Earlier({})])
+        both = together.Together([('Emails', Earlier({})), ('Other', Mailish({}))])
         c = fc.Canvas('', options(both))
-        press(c, '\r')
+        press(c, 'right', '\r')
         self.assertEqual(Earlier.chosen, ['home'])             # Together used to say None for everyone
 
 
 class Mailish(fc.Tree):
     """Stands in for the mail provider: one account."""
     KINDS = ('account',)
+
+    def root(self):
+        return fc.Node('', 'mail', True, source=self, kind='root')
 
     def children(self, node):
         return [fc.Node('/home', 'home', False, node, 'account')] if node.kind == 'root' else []

@@ -8,7 +8,7 @@ arrows, typing to filter. Each app is a **twig**. Use one, some, or all of them 
 git clone https://github.com/3-mmc/twigs && cd twigs
 ./twigs-launcher install            # or: install msg cal   (just those); puts `twigs` on your PATH
 twigs apps                          # which twigs there are, and what each still needs
-twigs                               # every installed twig that has something to show, side by side
+twigs                               # Emails, Messages, Calendar, TuiDo: each a branch, as they're set up
 ```
 
 Python 3.11 or newer and nothing else for the canvas itself; each twig says what it needs.
@@ -45,7 +45,7 @@ wants, listed on `Provider` in `twigs/core.py`) and an `APP` manifest:
 ```python
 APP = dict(name='notes', title='notes', alias=None, summary='your notes, by folder',
            cli='mytwig.cli:main',              # `twigs notes …` runs main(argv)
-           hub='mytwig.cli:providers',         # what it adds to `twigs` alone: [Provider]
+           hub='mytwig.cli:sections',          # what it adds to `twigs` alone: [(name, Provider)]
            needs=[('rg', 'ripgrep')])          # (a command, or 'module:name', and how to get it)
 ```
 

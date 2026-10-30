@@ -24,7 +24,10 @@ import os
 import threading
 import time
 
-from tuido.learning_ui import LEVELS
+try:
+    from tuido.learning_ui import LEVELS
+except ImportError:     # tuido's interface (textual) isn't here: its words for a skill's level
+    LEVELS = ('Not yet', 'Explored', 'Practised', 'Demonstrated')
 
 from twigs import core as tc
 from twigs.kit import notify, when
@@ -91,6 +94,10 @@ class Desk(tc.Provider):
             if now != seen:
                 seen = now
                 self.invalidate()
+
+    def loading(self):
+        """(what's loading, whether it's done), for the opening screen."""
+        return 'your desk', True
 
     def invalidate(self, path=None, deep=False):
         self.memo.clear()           # anything may have changed: work it all out again
@@ -365,7 +372,7 @@ class Desk(tc.Provider):
         """A task gone late, from when it did; a project holding one; a timer that's rung, till you
         look at it."""
         got = [self.rang.get(node.path), self.late(node)]
-        if node.kind == 'project':
+        if node.kind == 'project' and hasattr(self.store, 'overdue'):
             today = self.today()
             got += [time.mktime((date.fromisoformat(r['due']) + timedelta(days=1)).timetuple())
                     for r in self.store.overdue(node.data['id'], today.isoformat())]
@@ -515,7 +522,7 @@ class Desk(tc.Provider):
             out += [('\x05', 'rename', '⌃E rename'), ('\x04', 'delete', '⌃D delete')]
         if k in ('path', 'activity'):
             out.append(('\x12', 'continue', '⌃R continue'))
-        if k == 'task':
+        if k == 'task' and hasattr(self.store, 'set_due'):      # a tuido with due days
             out.append(('\x17', 'due', '⌃W due…'))
         if k in ('task', 'activity', 'habit', 'bullet', 'chapter'):
             out.append(('\x13', 'timer', '⌃S stop timer' if node.path in self.timers else '⌃S timer'))

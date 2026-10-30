@@ -27,9 +27,9 @@ def has_calendar():
     return cal.has_calendars() or bool(feeds.load())
 
 
-def providers():
-    """The calendar, if there's one: what cal adds to a canvas."""
-    return [calendar()] if has_calendar() else []
+def sections():
+    """The Calendar, if there's one: what cal adds to a canvas."""
+    return [('Calendar', calendar())] if has_calendar() else []
 
 
 def find(name):

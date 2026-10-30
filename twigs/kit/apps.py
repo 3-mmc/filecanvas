@@ -3,7 +3,7 @@ package's, registered under the entry point group 'twigs.apps' (its value a modu
 
     APP = dict(name='mail', title='mail & chats', alias='msgcanvas', summary='…',
                cli='pkg.module:main',          # `twigs NAME …` runs main(argv)
-               hub='pkg.module:providers',     # what it adds to `twigs` alone: [Provider], or None
+               hub='pkg.module:sections',      # what it adds to `twigs` alone: [(name, Provider)], or None
                needs=[('mbsync', 'isync')])    # (a command, 'module:x' or 'command:x', how to get it)
 
 Which are installed is kept in ~/.config/twigs/installed (`twigs install`)."""
@@ -56,7 +56,8 @@ def missing(app):
 def installed():
     try:
         with open(INSTALLED) as f:
-            return [n for n in json.load(f) if n in every()]
+            chosen = set(json.load(f))
+        return [n for n in every() if n in chosen]          # in the twigs' own order, not as kept
     except (OSError, ValueError):
         return list(BUILT_IN)       # none chosen yet: all of them
 

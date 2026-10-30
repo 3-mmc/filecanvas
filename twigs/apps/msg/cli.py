@@ -130,27 +130,27 @@ def has_calendar():
     return cli.has_calendar()
 
 
-def providers():
-    """Mail and chats, as they're set up (either, both, or neither): what msg adds to a canvas."""
+def sections():
+    """Emails and Messages, as they're set up (either, both, or neither): what msg adds to a canvas."""
     from . import chat, mail
     out = []
     if os.path.exists(accounts.NOTMUCH):
         found = configured()
         if found:
             defaults = accounts.load()[0]
-            out.append(mail.Mail(found, notify=defaults.get('notify', True), remember=state('mail-view.json'),
-                                 beacon_days=defaults.get('beacon_days', 30), later=state('later.json')))
+            out.append(('Emails', mail.Mail(found, notify=defaults.get('notify', True), remember=state('mail-view.json'),
+                                            beacon_days=defaults.get('beacon_days', 30), later=state('later.json'))))
     c = accounts.chat_settings()
     if c['enabled'] and shutil.which(c['nchat']) and chat.has_profiles(c['confdir'] or chat.confdir()):
-        out.append(chat.Chat(c['nchat'], c['confdir'], state('nchat-serve.log'), read_receipts=c['read_receipts'],
-                             typing=c['typing'], notify=c['notify']))
+        out.append(('Messages', chat.Chat(c['nchat'], c['confdir'], state('nchat-serve.log'),
+                                          read_receipts=c['read_receipts'], typing=c['typing'], notify=c['notify'])))
     return out
 
 
 def browse(start):
     """Mail, chats and the calendar on one canvas; any may be missing."""
     from twigs.kit import hub
-    found = providers() + ([calendar()] if has_calendar() else [])
+    found = sections() + ([('Calendar', calendar())] if has_calendar() else [])
     if not found:
         sys.exit('msgcanvas: nothing to show yet: `msgcanvas setup` for mail, `msgcanvas chat-setup` for chats, '
                  f'`calcanvas add` for a calendar')

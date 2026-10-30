@@ -660,8 +660,9 @@ class Calendar(fc.Provider):
 
     def months(self):
         today = self.today()
-        days = list(self.by_day) + [s.first for s in self.spans] + \
-            [dt.date.fromisoformat(d) for d in self.plans.days]
+        days = [d for d, es in self.by_day.items() if any(e.calendar not in self.quiet for e in es)] + \
+            [s.first for s in self.spans if s.calendar not in self.quiet] + \
+            [dt.date.fromisoformat(d) for d in self.plans.days]         # yours set how far it goes, not holidays'
         lo = max(min(days, default=today), add_months(today, -6)).replace(day=1)
         hi = min(max(days + [add_months(today, 3)]), add_months(today, 24)).replace(day=1)
         out, m = [], min(lo, today.replace(day=1))
