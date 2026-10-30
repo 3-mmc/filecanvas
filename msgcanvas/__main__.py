@@ -1,6 +1,7 @@
-"""msgcanvas: mail and chat on one canvas you move across.
+"""msgcanvas: mail, chat and your calendar on one canvas you move across.
 
     msgcanvas [ACCOUNT[/FOLDER]]   open your mail there (Esc leaves)
+    msgcanvas cal [YYYY-MM]        the calendar alone, on this month (or that one)
     msgcanvas setup                start accounts.toml, or make the sync/send configs from it
     msgcanvas import-thunderbird   add the accounts Thunderbird has (not its passwords)
     msgcanvas login NAME [--paste] store an account's password (pass), or sign in (OAuth)
@@ -115,9 +116,14 @@ def state(name):
     return os.path.join(d, name)
 
 
+def calendar():
+    from . import cal
+    return cal.Calendar(plans=state('whatif.json'))
+
+
 def browse(start):
-    """Mail and chats on one canvas; either may be missing."""
-    from . import chat, mail, together
+    """Mail, chats and the calendar on one canvas; any may be missing."""
+    from . import cal, chat, mail, together
     providers = []
     if os.path.exists(accounts.NOTMUCH):
         found = configured()
@@ -128,8 +134,11 @@ def browse(start):
     if c['enabled'] and shutil.which(c['nchat']) and chat.has_profiles(c['confdir'] or chat.confdir()):
         providers.append(chat.Chat(c['nchat'], c['confdir'], state('nchat-serve.log'), read_receipts=c['read_receipts'],
                                    typing=c['typing'], notify=c['notify']))
+    if cal.has_calendars():
+        providers.append(calendar())
     if not providers:
-        sys.exit('msgcanvas: nothing to show yet: `msgcanvas setup` for mail, `msgcanvas chat-setup` for chats')
+        sys.exit('msgcanvas: nothing to show yet: `msgcanvas setup` for mail, `msgcanvas chat-setup` for chats, '
+                 f'.ics files in {cal.CALENDARS} for a calendar')
     for p in providers:          # chats ask for their list at once, so it's there by the time it's shown
         if hasattr(p, 'serve'):
             p.serve.ready.wait(3)
@@ -169,6 +178,11 @@ def main(argv=None):
         if made:
             print(f"msgcanvas: configs made for {', '.join(a.name for a in made)} in {accounts.CONFIG}\n"
                   'Next: `msgcanvas login NAME` for each, then `msgcanvas sync`.')
+    elif cmd == 'cal' and len(argv) <= 2:
+        from . import cal
+        if not cal.has_calendars():
+            sys.exit(f'msgcanvas: no calendars yet: put .ics files (or folders of them) in {cal.CALENDARS}')
+        fc.pick(argv[1] if len(argv) == 2 else '', provider=calendar(), **LOOK)
     elif cmd == 'chat-setup' and len(argv) == 1:
         chat_setup()
     elif cmd == 'import-thunderbird' and len(argv) == 1:
@@ -177,7 +191,7 @@ def main(argv=None):
         login(argv[1], paste=argv[2:] == ['--paste'])
     elif cmd == 'sync' and len(argv) <= 2:
         sync(argv[1] if len(argv) == 2 else None)
-    elif len(argv) <= 1 and cmd not in ('login', 'sync', 'import-thunderbird', 'chat-setup'):
+    elif len(argv) <= 1 and cmd not in ('login', 'sync', 'import-thunderbird', 'chat-setup', 'cal'):
         browse(cmd)
     else:
         sys.exit(__doc__.strip())

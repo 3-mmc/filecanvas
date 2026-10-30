@@ -1,6 +1,6 @@
 # msgcanvas
 
-Mail and chat on one canvas you move across: accounts branch into folders (their unread counts
+Mail, chat and your calendar on one canvas you move across: accounts branch into folders (their unread counts
 in a column of their own), folders into groups (by date: Today, Yesterday, This week, Last week,
 Earlier this month, each month, each year; or by sender; or none: **⌃L** switches, and it's
 remembered), groups into threads, threads into who replied to whom. The message you're on opens
@@ -46,6 +46,27 @@ server keeps everything. `0` keeps it all.
 
 Passwords are `pass` entries (`mail/<name>`); OAuth tokens are gpg-encrypted files under
 `~/.local/share/msgcanvas/tokens/`, kept fresh by neomutt's `mutt_oauth2.py`.
+
+## Calendar
+
+Your calendar beside mail and chats (or alone: `msgcanvas cal [YYYY-MM]`), opening on this month
+at today. Months branch into what's on them: a day with one thing is that thing (its time in a
+column of their own), a day with more opens into them, and what runs over days (a trip, a visit)
+is a bar in its own colour among the days it starts on. Each thing opens onto when, where, and
+what it says.
+
+**What-ifs.** Where two things on a day overlap, the day forks (⑂) into them, and the bar counts
+what's still to decide. **⌃W** asks "what if…" anywhere: on a day it weighs your idea against
+the day as it is; on something on the calendar, against that; on a month, say the day first
+(`12 dinner with D`). Each alternative can grow what would follow it (**⌃N** then…). **⌃K** keeps
+one: it's ticked and its branch lit, the rest fade (to dust in the bar) but stay, to change your
+mind (⌃K again). **⌃E** renames a what-if, **⌃D** throws it away. What-ifs are kept in
+`~/.local/state/msgcanvas/whatif.json`: nothing is written to your calendar.
+
+Calendars are `.ics` files in `~/.local/share/msgcanvas/calendars/`: a folder of them per
+calendar (vdirsyncer's layout; a `displayname` file names it) or one file per calendar (Google
+Calendar's Settings → Export, unzipped). It's read again whenever they change. Repeats are laid
+out (FREQ, INTERVAL, COUNT, UNTIL, EXDATE, moved occurrences; not yet BYDAY and the like).
 
 ## Chats
 
