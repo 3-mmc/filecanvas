@@ -688,6 +688,10 @@ class Provider:
         """(fg, bg) to draw `node` as a chip, as the bar draws its path; None for plain text."""
         return None
 
+    def reference(self, node):
+        """Content to keep beside other bookmarks: root, extra nodes, reading order and width."""
+        return dict(root=node, nodes=[], priority=1, width=32, labels={})
+
     def chip_rows(self, node):
         """How many label lines wear the chip; None means the whole label."""
         return None
@@ -1066,6 +1070,7 @@ class Canvas:
         else:
             self.focus = node
         self.backdrop = opts.backdrop if isinstance(opts.backdrop, dict) else {}
+        self.layer = None     # (child canvas, continuation, title), on this terminal
         self.bookmarks = {}   # slot: (tuple of ids from the root, short label)
         self.cam = None       # (x, y) world position of the top-left corner, floats
         self.target = None
@@ -1127,6 +1132,8 @@ class Canvas:
         if self.flowing:
             return FRAME
         now, waits = self.clock(), []
+        if self.layer:
+            waits.append(self.layer[0].due())
         last = {'ok': SHOWN_OK, 'failed': SHOWN_FAILED, 'note': SHOWN_NOTE}
         for _, state, since in self.statuses.values():
             if state == 'busy':
@@ -1147,6 +1154,21 @@ class Canvas:
     def say(self, text):
         """A line in the bar until the next key: what an action did."""
         self.message = text
+
+    def open_layer(self, start, done, title='Choose a file'):
+        settings = dict(provider=FileSystem(self.opts.git, self.opts.ls_colors, self.opts.recent),
+                        backdrop='off', theme=self.theme, glyphs=self.opts.glyphs,
+                        color=self.opts.color, ease=self.opts.ease, pane=False)
+        child = Canvas(start, options(**settings))
+        self.layer = (child, done, title)
+
+    def changed(self):
+        providers = [self.source] + ([self.layer[0].source] if self.layer else [])
+        changed = False
+        for p in providers:
+            if p.changed:
+                p.changed, changed = False, True
+        return changed
 
     def outside(self, fn):
         """Run fn() with the terminal to itself, after this key: the canvas steps aside and comes
@@ -1289,6 +1311,76 @@ class Canvas:
                 n = n.parent
         return on
 
+    def reference_specs(self, references):
+        specs = []
+        targets = list(references.values())
+        for n in references.values():
+            while n is not None and n is not self.focus:
+                n = n.parent
+            if n is self.focus:
+                break
+        else:
+            targets.append(self.focus)
+        for n in targets:
+            spec = self.source.reference(n)
+            same = next((s for s in specs if s['root'] is spec['root']), None)
+            if same:
+                same['nodes'] += [n] + spec['nodes']
+                same['labels'].update(spec['labels'])
+            else:
+                spec['nodes'] = [n] + spec['nodes']
+                specs.append(spec)
+        # A reference above another already includes its path; keep just the outer branch.
+        out = []
+        roots = {id(s['root']) for s in specs}
+        for spec in specs:
+            parent = spec['root'].parent
+            while parent and id(parent) not in roots:
+                parent = parent.parent
+            if parent is None:
+                out.append(spec)
+            else:
+                outer = next(s for s in specs if s['root'] is parent)
+                outer['nodes'] += [spec['root']] + spec['nodes']
+                outer['labels'].update(spec['labels'])
+        return sorted(out, key=lambda s: s['priority'])
+
+    def spread_references(self, nodes, specs, lines_of, width, height):
+        positions, grouped = {}, set()
+        lane_x, band_y, band_bottom = 2, 0, 0
+        for index, spec in enumerate(specs):
+            root = spec['root']
+            group = []
+            for n in nodes:
+                at = n
+                while at and at is not root:
+                    at = at.parent
+                if at is root:
+                    group.append(n)
+            lane_width = max((min(4, (n.depth - root.depth) * 2) +
+                              max(cells(l) for l in lines_of(n)) + 4 for n in group), default=spec['width'])
+            if lane_x > 2 and lane_x + lane_width > width - 2:
+                lane_x, band_y = 2, band_bottom + 3
+            y = band_y + (index % 2) * 2
+            for n in group:
+                positions[id(n)] = lane_x + min(4, (n.depth - root.depth) * 2)
+                n.row = y
+                y += len(lines_of(n)) + 1
+                grouped.add(id(n))
+            band_bottom = max(band_bottom, y)
+            lane_x += lane_width + 5
+        # Pull the shared stems left and connect them with longer branches.
+        for n in reversed(nodes):
+            if id(n) in grouped:
+                continue
+            kids = getattr(n, '_shown', [])
+            if kids:
+                n.row = round(sum(k.row for k in kids) / len(kids))
+                positions[id(n)] = min(-4, min(positions[id(k)] for k in kids)) - max(cells(l) for l in lines_of(n)) - 8
+            else:
+                positions[id(n)] = -20
+        return positions
+
     def bookmark_hint(self):
         slots = '  '.join(f'F{i} {clip(self.bookmarks[i][1], 10)}' if i in self.bookmarks else f'F{i} save'
                           for i in range(1, 6))
@@ -1363,6 +1455,36 @@ class Canvas:
 
     # -- drawing
     def frame(self, w, h, animate=True):
+        lines, moving = self.tree_frame(w, h, animate)
+        if not self.layer:
+            return lines, moving
+        child, _, title = self.layer
+        # Leave a rim of the original canvas visible beneath the file tree.
+        margin_x, margin_y = (3 if w >= 40 else 0), (2 if h >= 14 else 0)
+        width, height = max(8, w - margin_x * 2), max(5, h - margin_y * 2)
+        inside, child_moving = child.frame(max(4, width - 2), max(3, height - 2), animate)
+        dim = self.paint.fg('ghost')
+        plain = lambda s: re.sub(r'\x1b\[[0-9;]*m', '', s)
+        base = [dim + clip(plain(s), w).ljust(w) + '\033[0m' for s in lines]
+        border = self.paint.fg('path')
+        heading = clip(' ' + title + ' · Esc back ', max(1, width - 2))
+        panel = [border + '╭' + heading + '─' * max(0, width - cells(heading) - 2) + '╮\033[0m']
+        for line in inside[:height - 2]:
+            pad = max(0, width - 2 - cells(plain(line)))
+            panel.append(border + '│\033[0m' + line + ' ' * pad + border + '│\033[0m')
+        panel += [border + '╰' + '─' * max(0, width - 2) + '╯\033[0m']
+        for i, line in enumerate(panel):
+            y = margin_y + i
+            if y >= len(base):
+                break
+            backdrop = plain(lines[y])
+            left = clip(backdrop, margin_x).ljust(margin_x)
+            # The rim is deliberately plain, never inherited terminal attributes.
+            right = ' ' * max(0, w - margin_x - width)
+            base[y] = dim + left + '\033[0m' + line + dim + right + '\033[0m'
+        return base, moving or child_moving
+
+    def tree_frame(self, w, h, animate=True):
         o, P, T = self.opts, self.paint, self.theme
         hard, soft, cap_l, cap_r = self.glyphs
         plain = o.glyphs == 'plain'
@@ -1379,6 +1501,17 @@ class Canvas:
         w -= pane_w
         references = self.reference_nodes()
         anchors = self.reference_paths(references) if self.bookmarks else None
+        specs = self.reference_specs(references) if len(references) >= 2 else []
+        reference_labels, reference_widths, reference_limits = {}, {}, {}
+        if specs:
+            context = {}
+            for index, spec in enumerate(specs):
+                for n in [spec['root'], *spec['nodes']]:
+                    context[id(n)] = n
+                    reference_widths[id(n)] = spec['width'] if spec['priority'] == 0 else max(22, spec['width'] - index * 3)
+                    reference_limits[id(n)] = max(5, h - 12) if spec['priority'] == 0 else 4
+                reference_labels.update(spec['labels'])
+            anchors.update(self.reference_paths(context))
         slots = {}
         for slot, n in references.items():
             slots.setdefault(id(n), []).append(str(slot))
@@ -1389,16 +1522,24 @@ class Canvas:
             got = drawn.get(id(n))
             if got is None:
                 width = None if isinstance(n, Stub) else self.source.width(n)
-                text = n.label()
+                text = reference_labels.get(getattr(n, "path", None), n.label())
                 if id(n) in slots:
                     text = '[F' + ',F'.join(slots[id(n)]) + '] ' + text
+                width = reference_widths.get(id(n), width)
                 got = wrap(text, width) if width else [clip(printable(l), o.colmax) for l in text.split('\n')]
+                limit = reference_limits.get(id(n))
+                if limit and len(got) > limit:
+                    got = got[:limit - 1] + ['…']
                 drawn[id(n)] = got = got or ['']
             return got
         layout(self.root, o, self.focus, lambda n: len(lines_of(n)), anchors)
         nodes = []
         place(self.root, 0, 0, self.focus, o, nodes)
 
+        if specs:
+            nodes = [n for n in nodes if id(n) in anchors]
+            for n in nodes:
+                n._shown = [k for k in getattr(n, '_shown', []) if id(k) in anchors]
         marks, chips = {}, {}   # (the mark beside it, how bright it is), and its chip colours, per entry
         wall, self.next_beacon, self.next_glow = self.wall(), None, None
         alert = (T.get('alert_fg', 15), T.get('alert_bg', T.get('git_conflict', 160)))
@@ -1429,6 +1570,8 @@ class Canvas:
         for d in range(max(widths) + 1):
             xs.append(xs[-1] + widths.get(d, 0) + extra)
 
+        positions = self.spread_references(nodes, specs, lines_of, w, h - 2) if specs else {}
+        xpos = lambda n: positions.get(id(n), xs[n.depth])
         path = set()
         n = self.focus
         while n:
@@ -1439,7 +1582,7 @@ class Canvas:
 
         # Camera: keep the focus inside a box round the middle (a fraction of the view).
         view_h = h - 2 - (1 if o.header else 0)
-        fx, fy = xs[self.focus.depth], self.focus.row
+        fx, fy = xpos(self.focus), self.focus.row
         aim_x, aim_y = w * o.across, view_h / 2
         if self.cam is None:
             self.cam = (fx - aim_x, fy - aim_y)
@@ -1457,18 +1600,21 @@ class Canvas:
             active_width = max(cells(l) for l in lines_of(self.focus)) + 4
             left, right = fx, fx + min(active_width, max(1, w - 4))
             top, bottom = fy, fy + min(len(lines_of(self.focus)), max(1, view_h - 2))
-            nearby = sorted(references.values(), key=lambda n: abs(n.row - fy) + abs(xs[n.depth] - fx))
+            candidates = [n for n in nodes if id(n) in positions and positions[id(n)] >= 0] if specs else list(references.values())
+            nearby = sorted(candidates, key=lambda n: abs(n.row - fy) + abs(xpos(n) - fx))
             for n in nearby:
                 if id(n) not in shown_ids:
                     continue
-                x, y = xs[n.depth], n.row
+                x, y = xpos(n), n.row
                 bounds = (min(left, x), max(right, x + max(cells(l) for l in lines_of(n)) + 4),
                           min(top, y), max(bottom, y + len(lines_of(n))))
                 if bounds[1] - bounds[0] <= w - 4 and bounds[3] - bounds[2] <= view_h - 2:
                     left, right, top, bottom = bounds
             tx, ty = self.target or self.cam
             tx = max(right - w + 2, min(tx, left - 2))
-            ty = max(bottom - view_h + 1, min(ty, top - 1))
+            ty = (top + bottom - view_h) / 2
+            if specs:
+                tx = max(right - w + 2, min(0, left - 2))
         self.target = (tx, ty)
         cx, cy = self.cam
         if not animate or o.ease >= 1:
@@ -1483,7 +1629,7 @@ class Canvas:
 
         grid = [[(' ', '')] * w for _ in range(view_h)]
 
-        def put(x, y, text, style):
+        def put(x, y, text, style, behind=False):
             # One cell per column: a wide character fills two, the second holding '' (drawn as
             # nothing), so a row never runs past the screen's edge and wraps.
             y -= oy
@@ -1495,6 +1641,9 @@ class Canvas:
                 if wide == 0:
                     if 0 < xx <= w and row[xx - 1][0]:
                         row[xx - 1] = (row[xx - 1][0] + ch, row[xx - 1][1])
+                    continue
+                if behind and 0 <= xx < w and row[xx] != (' ', ''):
+                    xx += wide
                     continue
                 for edge in range(xx, xx + wide):  # don't leave half of a wide character behind
                     if 0 <= edge < w:
@@ -1526,7 +1675,7 @@ class Canvas:
             return max(s * marks[id(n)][1], 0.3)
 
         for n in nodes:
-            x = xs[n.depth] + leads.get(n.depth, 0)
+            x = xpos(n) + leads.get(n.depth, 0)
             lines = lines_of(n)
             text, widest = lines[0], max(cells(l) for l in lines)
             mark, chip = marks[id(n)][0], chips[id(n)]
@@ -1586,7 +1735,7 @@ class Canvas:
                 cur += 2
             if id(n) in counts:          # right-aligned in the column's own, after its names
                 text_n, role, bold = counts[id(n)]
-                right = xs[n.depth] + names[n.depth] + 2 + numbers[n.depth]
+                right = xpos(n) + (max(cells(l) for l in lines) + 3 if specs else names[n.depth] + 2) + numbers[n.depth]
                 put(right - cells(text_n), n.row, text_n, P.fg(role, s, bold))
                 cur = right
             if is_open(n, self.focus, o.peek) and n._shown:
@@ -1594,10 +1743,10 @@ class Canvas:
                 hot = id(n) in path and any(id(k) in path for k in kids)
                 line = P.fg('line', STRENGTH[min(dist(n) * 2, len(STRENGTH) - 1)])
                 lit = P.fg('path_line')
-                spine = xs[n.depth + 1] - 2
-                end = cur + 1
-                put(end, n.row, '─' * max(0, spine - end), lit if hot else line)
-                top, bot = kids[0].row, kids[-1].row
+                spine = min(x - 2, min(xpos(k) for k in kids) - 2) if specs else min(xpos(k) for k in kids) - 2
+                end = x - 1 if spine <= x else cur + 1
+                put(min(end, spine), n.row, '─' * abs(spine - end), lit if hot else line, behind=bool(specs))
+                top, bot = min(k.row for k in kids), max(k.row for k in kids)
                 rows = {k.row for k in kids}
                 strength_of_line = STRENGTH[min(dist(n) * 2, len(STRENGTH) - 1)]
                 own = {k.row: P.fg(c, strength_of_line) for k in kids     # a child's own colour, into it
@@ -1612,9 +1761,9 @@ class Canvas:
                         ch = '│'
                     # the lit part of the spine runs from the parent's row to the chosen child's
                     on = any(min(n.row, k.row) <= y <= max(n.row, k.row) for k in chosen)
-                    put(spine, y, ch, lit if on else own.get(y, line))
+                    put(spine, y, ch, lit if on else own.get(y, line), behind=bool(specs))
                 for k in kids:
-                    put(spine + 1, k.row, '─', lit if k in chosen else own.get(k.row, line))
+                    put(spine + 1, k.row, '─' * max(1, xpos(k) - spine - 1), lit if k in chosen else own.get(k.row, line), behind=bool(specs))
 
         self.backdrop_under(grid, 1 if o.header else 0)
         lines = [o.header(full)] if o.header else []
@@ -1934,6 +2083,17 @@ def keys(data):
 
 def apply(c, k, opts):
     """One key; returns ('done', what the provider chose: the path) / ('cancel', None) / None."""
+    if c.layer:
+        child, done, _ = c.layer
+        result = apply(child, k, child.opts)
+        if result:
+            if result[0] == 'done' and os.path.isdir(result[1]):
+                child.enter()
+                return None
+            c.layer = None
+            if result[0] == 'done':
+                done(result[1])
+        return None
     if c.asking:
         return answer(c, k)
     c.message = None
@@ -2108,8 +2268,8 @@ def run(opts):
         while True:
             if os.get_terminal_size(fd) != size:
                 size, dirty, shown = os.get_terminal_size(fd), True, []
-            if c.source.changed:
-                c.source.changed, dirty = False, True
+            if c.changed():
+                dirty = True
             if dirty:
                 lines, _ = c.frame(*size, animate)
                 out(update(lines, shown))

@@ -971,3 +971,97 @@ class Bookmarks(unittest.TestCase):
         press(c, 'f1', '\x02')
         self.assertFalse(c.bookmarks)
         self.assertIsNotNone(c.asking)
+
+
+class FileLayers(unittest.TestCase):
+    def test_file_picker_is_a_layer_and_cancel_preserves_the_canvas(self):
+        with tempfile.TemporaryDirectory() as folder:
+            c = fc.Canvas('', options(provider=fc.Tree(MAIL)))
+            c.go(['/Inbox', '/Inbox/Rail pass'])
+            press(c, 'f1')
+            focus, camera = c.focus, c.cam
+            chosen = []
+            c.open_layer(folder, chosen.append, 'Send a file to Ann')
+            self.assertFalse(c.waiting)
+            lines, _ = c.frame(120, 28, animate=False)
+            raw = '\n'.join(lines)
+            self.assertIn('Send a file to Ann', ANSI.sub('', raw))
+            self.assertNotIn('\x1b[?1049', raw)
+            self.assertIs(c.focus, focus)
+            self.assertIn(1, c.bookmarks)
+            self.assertIsNone(press(c, 'esc'))
+            self.assertIsNone(c.layer)
+            self.assertIs(c.focus, focus)
+            self.assertFalse(chosen)
+
+    def test_enter_opens_a_folder_then_returns_a_file_to_the_parent(self):
+        with tempfile.TemporaryDirectory() as folder:
+            nested = os.path.join(folder, 'nested')
+            os.mkdir(nested)
+            path = os.path.join(nested, 'report.txt')
+            with open(path, 'w') as f:
+                f.write('hello')
+            c = fc.Canvas('', options(provider=fc.Tree(MAIL)))
+            chosen = []
+            c.open_layer(folder, chosen.append)
+            self.assertIsNone(press(c, '\r'))
+            self.assertIsNotNone(c.layer)
+            self.assertEqual(c.layer[0].focus.path, path)
+            press(c, '\r')
+            self.assertIsNone(c.layer)
+            self.assertEqual(chosen, [path])
+            self.assertFalse(c.waiting)
+
+
+class LayerTerminal(unittest.TestCase):
+    def test_file_layer_never_switches_terminal_screens(self):
+        import fcntl, pty, struct, subprocess, sys, termios, time
+        with tempfile.TemporaryDirectory() as folder:
+            script = '''
+import sys
+sys.path.insert(0, {here!r})
+from twigs import core as fc
+class App(fc.Tree):
+    def actions(self, node):
+        return [('a', 'attach', 'attach')]
+    def act(self, node, name, canvas):
+        canvas.open_layer({folder!r}, lambda path: None, 'FILE LAYER')
+fc.pick('', provider=App({{'CHAT HERE': 1}}), backdrop='off', ease=1, glyphs='plain', git=False)
+'''.format(here=os.path.dirname(os.path.dirname(os.path.abspath(fc.__file__))), folder=folder)
+            master, slave = pty.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 100, 0, 0))
+            proc = subprocess.Popen([sys.executable, '-c', script], stdin=slave, stdout=slave,
+                                    stderr=subprocess.PIPE, start_new_session=True,
+                                    preexec_fn=lambda: fcntl.ioctl(0, termios.TIOCSCTTY, 0))
+            os.close(slave)
+            seen = b''
+
+            def until(needle):
+                nonlocal seen
+                end = time.monotonic() + 4
+                while needle not in seen and time.monotonic() < end:
+                    if select.select([master], [], [], 0.05)[0]:
+                        seen += os.read(master, 65536)
+                self.assertIn(needle, seen)
+
+            try:
+                until(b'CHAT HERE')
+                os.write(master, b'a')
+                until(b'FILE LAYER')
+                self.assertEqual(seen.count(b'\x1b[?1049h'), 1)
+                self.assertNotIn(b'\x1b[?1049l', seen)
+                os.write(master, b'\x1b')
+                # The next key is a separate input read, not part of the escape sequence.
+                ready = select.select([master], [], [], 2)[0]
+                self.assertTrue(ready)
+                seen += os.read(master, 65536)
+                self.assertNotIn(b'\x1b[?1049l', seen)
+                os.write(master, b'\x1b')
+                proc.wait(4)
+                self.assertEqual(proc.returncode, 0, proc.stderr.read())
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait()
+                proc.stderr.close()
+                os.close(master)

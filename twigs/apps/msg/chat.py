@@ -670,6 +670,30 @@ class Chat(fc.Provider):
             return 'home_fg', 'home_bg'
         return 'person_fg', f'person{p.colour(chat, sender) % fc.PEOPLE}'
 
+    def reference(self, node):
+        at = node
+        while at.parent and at.kind != 'chat':
+            at = at.parent
+        if at.kind != 'chat':
+            return super().reference(node)
+        runs = [n for n in at.load() if n.kind == 'run']
+        messages = [m for r in runs for m in r.load()]
+        recent = messages[-3:]
+        if node.kind == 'chat-message' and node not in recent:
+            recent = [node] + recent[-2:]
+        elif node.kind == 'run':
+            chosen = node.load()
+            if chosen and not any(m in recent for m in chosen):
+                recent = chosen[-1:] + recent[-2:]
+        selected = {m.path for m in recent}
+        labels = {}
+        for r in runs:
+            p, chat, msgs, sender = r.data
+            kept = [m for m in msgs if f'{at.path}{SEP}{m["id"]}' in selected]
+            if kept:
+                labels[r.path] = p.who(sender) + ''.join('\n' + self.message_meta(m) for m in kept)
+        return dict(root=at, nodes=recent, priority=2, width=36, labels=labels)
+
     def chip_rows(self, node):
         return 1 if node.kind == 'run' else None
 
@@ -811,12 +835,10 @@ class Chat(fc.Provider):
             canvas.ask(f'reply to {p.who(m.get("sender"))}',
                        lambda text: self.send(canvas, p, chat, text, quoted=m['id']), changed=self.typing_in(p, chat))
         elif name == 'attach':
-            def choose():
-                path = self.pick(files.downloads())
-                if path:
-                    canvas.ask(f'{os.path.basename(path)} to {to}, saying (or nothing)',
-                               lambda text: self.send(canvas, p, chat, text, file=path, empty_ok=True))
-            canvas.outside(choose)
+            def chosen(path):
+                canvas.ask(f'{os.path.basename(path)} to {to}, saying (or nothing)',
+                           lambda text: self.send(canvas, p, chat, text, file=path, empty_ok=True))
+            canvas.open_layer(files.downloads(), chosen, title=f'Send a file to {to}')
         elif name in ('open', 'save'):
             use = (lambda path: files.open_file(path)) if name == 'open' else \
                   (lambda path: files.copy_to(path, files.downloads()))

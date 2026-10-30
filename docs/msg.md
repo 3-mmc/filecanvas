@@ -117,6 +117,10 @@ A profile nchat is open on is locked: msgcanvas shows it greyed until nchat is c
 | ⌃O ⌃S | something attached | open it (Windows' app under WSL) / save it to Downloads; a chat's file is fetched first |
 | ⌃E ⌃D | an unsent draft | go on writing it / throw it away |
 
+The chat file picker opens over the dimmed canvas, keeping the chat and bookmarks underneath.
+Enter opens folders or picks a file; Esc returns to the chat. Choosing a file opens its caption
+line directly, without leaving the terminal canvas.
+
 A mail draft has its headers on top (`To:`, `Cc:`, `Bcc:`, `Subject:`, and an `Attach: path` line
 per file) and the body under a blank line. When the editor closes: **y** send, **e** edit, **a**
 attach a file, **d** keep it for later (the account's *Unsent* folder), **q** throw it away. A sent

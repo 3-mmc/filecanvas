@@ -98,6 +98,9 @@ class Together(fc.Provider):
     def chip(self, node):
         return self.ask('chip', node, None)
 
+    def reference(self, node):
+        return self.ask('reference', node, super().reference(node))
+
     def chip_rows(self, node):
         return self.ask('chip_rows', node, None)
 

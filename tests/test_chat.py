@@ -363,6 +363,67 @@ class Behaviour(unittest.TestCase):
         metadata = row[:row.index(clock)].rsplit('\x1b[0m', 1)[-1]
         self.assertNotIn('48;', metadata)
 
+    def test_attach_uses_canvas_layer_then_composes_without_leaving_the_terminal(self):
+        folder = os.path.join(TMP, 'layer-files')
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, 'report.txt')
+        with open(path, 'w') as f:
+            f.write('hello')
+        original = chat.files.downloads
+        chat.files.downloads = lambda: folder
+        self.addCleanup(setattr, chat.files, 'downloads', original)
+        canvas = fc.Canvas('', options(self.c))
+        canvas.go([chat.profile_id(self.p.id), chat.chat_id(self.p.id, 'ann')])
+        focus = canvas.focus
+        press(canvas, '\x01')
+        self.assertIsNotNone(canvas.layer)
+        self.assertFalse(canvas.waiting)
+        self.assertIn('Send a file to Ann', '\n'.join(screen(canvas)))
+        press(canvas, 'esc')
+        self.assertIs(canvas.focus, focus)
+        self.assertIsNone(canvas.asking)
+        press(canvas, '\x01', '\r')
+        self.assertIsNone(canvas.layer)
+        self.assertIsNotNone(canvas.asking)
+        press(canvas, *'here it is', '\r')
+        self.assertEqual(self.asked[-1], ('send_message', dict(profile=self.p.id, chat='ann',
+                                                             text='here it is', file=path)))
+        for _, _, _, _, timer in self.c.sending.values():
+            timer.cancel()
+
+    def test_mail_and_recent_chat_references_use_staggered_columns(self):
+        class MailReference(fc.Tree):
+            pane = False
+
+            def label(self, node):
+                return node.data if isinstance(node.data, str) else node.name
+
+            def reference(self, node):
+                root = node if node.is_dir else node.parent
+                return dict(root=root, nodes=root.load(), priority=0, width=66, labels={})
+        mail = MailReference({'Email': {'Subject': 'A useful subject',
+                                       'Body': 'Email content with enough detail to read beside a chat. ' * 5}})
+        self.p.messages['ann'] = {f'm{i}': dict(id=f'm{i}', sender='ann' if i % 2 else 'me',
+                                                      text=f'recent message {i}', time=1700000000000 + i * 1000)
+                                  for i in range(10)}
+        canvas = fc.Canvas('', options(together.Together([('Emails', mail), ('Messages', self.c)])))
+        sections = canvas.root.load()
+        canvas.go([sections[0].path, '/Email'])
+        press(canvas, 'right', 'down', 'f1')
+        canvas.go([sections[1].path, chat.profile_id(self.p.id), chat.chat_id(self.p.id, 'ann')])
+        press(canvas, 'right', 'f2')
+        lines = screen(canvas, 160, 40)
+        self.assertEqual(sum('recent message' in line for line in lines[:-2]), 3)
+        mail_line = next((i, l.index('Email content')) for i, l in enumerate(lines) if 'Email content' in l)
+        chat_line = next((i, l.index('recent message 9')) for i, l in enumerate(lines) if 'recent message 9' in l)
+        self.assertLess(mail_line[1], chat_line[1])
+        self.assertLess(mail_line[0], 20)
+        self.assertNotEqual(mail_line[0], chat_line[0])
+        camera = canvas.target
+        press(canvas, 'f1')
+        screen(canvas, 160, 40)
+        self.assertEqual(canvas.target, camera)
+
     def test_sending_spins_then_ticks_or_fails(self):
         canvas = fc.Canvas('', options(fc.Tree({})))
         self.c.send(canvas, self.p, 'ann', 'hi')

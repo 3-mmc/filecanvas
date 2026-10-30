@@ -47,9 +47,11 @@ so these cost nothing while nothing happens:
 On keyboards that use F-keys for system controls, use Fn too.
 
 Saved positions wear their slot number. Their branches stay open and lit, even with folding on.
-The canvas collapses intervening rows into “more” markers, keeping a little context around each
-reference; arrow navigation still reaches every item. The camera fits the active position and
-as many references as the window allows, staying put while they fit together. Clear the bookmarks
+With several bookmarks, reference branches spread into staggered columns, joined by extended
+branch lines. Mail gets the leftmost, wider column; chats show three recent messages in narrower
+columns. Previews shorten long content, while arrow navigation still reaches every item. The
+camera centres the reference contents and keeps the arrangement steady between bookmark jumps.
+Narrow windows wrap columns and prioritize the current position. Clear the bookmarks
 to return to the full layout. This works across twigs, as well as within a single twig.
 
 ## Growing a twig

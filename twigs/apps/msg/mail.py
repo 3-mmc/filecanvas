@@ -637,6 +637,15 @@ class Mail(fc.Provider):
     def dim(self, node):
         return 0.8 if node.kind == 'folder' and not node.data['total'] else 1.0
 
+    def reference(self, node):
+        at = node
+        while at.parent and at.kind not in ('message', 'thread'):
+            at = at.parent
+        if at.kind not in ('message', 'thread'):
+            at = node
+        content = [n for n in at.load() if n.kind in ('subject', 'person', 'when', 'body', 'attachment')]
+        return dict(root=at, nodes=content, priority=0, width=66, labels={})
+
     def pane_for(self, node):
         """The message is on the canvas: the pane only shows its pictures."""
         path = self.message_path(node)
