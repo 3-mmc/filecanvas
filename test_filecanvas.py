@@ -163,6 +163,23 @@ class StayingOpen(unittest.TestCase):
         self.assertTrue(text[2].endswith('line 8'))
         self.assertIn('of 41', text[1])
 
+    def test_a_conversation_opens_at_its_end_and_follows_it(self):
+        class Talk(Live):
+            def preview_end(self, node):
+                return True
+        data = {'chat': '\n'.join(f'line {i}' for i in range(40))}
+        c = fc.Canvas('', options(provider=Talk(data)))
+        text = screen(c, 100, 12)
+        self.assertTrue(text[-3].endswith('line 39'))
+        data['chat'] += '\nline 40'
+        c.source.invalidate()
+        self.assertTrue(screen(c, 100, 12)[-3].endswith('line 40'))     # at the end: follows
+        press(c, 'pgup')
+        screen(c, 100, 12)
+        data['chat'] += '\nline 41'
+        c.source.invalidate()
+        self.assertFalse(screen(c, 100, 12)[-3].endswith('line 41'))    # scrolled up: stays put
+
     def test_a_removed_focus_lands_beside_it(self):
         data = {'Inbox': {'t1': 1, 't2': 2, 't3': 3}}
         c = self.canvas(data, 'Inbox')
