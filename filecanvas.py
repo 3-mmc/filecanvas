@@ -21,7 +21,7 @@ Settings are flags (--help), and any of them can live in ~/.config/filecanvas/co
 The file system is one provider of the tree (FileSystem); anything else can be another
 (Provider, and Tree for nested dicts): `pick(provider=...)`.
 """
-import argparse, json, os, select, stat, subprocess, sys, threading, unicodedata
+import argparse, json, os, re, select, shutil, stat, subprocess, sys, threading, unicodedata
 from concurrent.futures import ThreadPoolExecutor
 
 CONFIG = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'),
@@ -231,6 +231,50 @@ def ls_colors():
         if colour is not None or bold:
             out[key.lower() if key.startswith('*') else key] = (colour, bold)
     return out
+
+
+# -- pictures in the pane
+
+class Picture:
+    """A picture for the reading pane: preview() returns one, or a list of text and pictures.
+    chafa draws it as coloured blocks, as wide as the pane and at most `rows` high, so it scrolls
+    with the text in any terminal; without chafa it's a line saying what it is."""
+    SGR = re.compile(r'\x1b\[[0-9;]*m')
+    # any other CSI (not ending in m), OSC / DCS / PM / APC strings, and any other ESC pair
+    OTHER = re.compile(r'\x1b\[[0-9;?]*[A-Za-ln-z@`]|\x1b[\]P^_][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[^\[]')
+
+    def __init__(self, path, name=None, rows=20):
+        self.path, self.name, self.rows = path, name or os.path.basename(path), rows
+        self.drawn = {}
+
+    def lines(self, width, height, truecolor=True):
+        key = (width, min(height, self.rows), truecolor)
+        if key not in self.drawn:
+            self.drawn[key] = self.draw(*key)
+        return self.drawn[key]
+
+    def draw(self, width, height, truecolor):
+        note = ['🖼 ' + clip(printable(self.name), max(1, width - 2))]
+        if not shutil.which('chafa') or width < 4 or height < 2:
+            return note
+        try:
+            out = subprocess.run(['chafa', '--format=symbols', '--colors=' + ('full' if truecolor else '256'),
+                                  f'--size={width}x{height}', '--animate=off', '--polite=on', self.path],
+                                 capture_output=True, timeout=10).stdout.decode('utf-8', 'replace')
+        except (OSError, subprocess.SubprocessError):
+            return note
+        return self.clean(out) or note
+
+    def clean(self, out):
+        """chafa's lines with only their colours: other escapes (cursor, modes) go whole, then
+        stray control characters; each line ends in a reset."""
+        lines = []
+        for line in out.rstrip('\n').split('\n'):
+            line = self.OTHER.sub('', line)
+            codes, texts = self.SGR.findall(line), self.SGR.split(line)
+            kept = [''.join(c for c in t if c.isprintable()) for t in texts]
+            lines.append(''.join(k + (codes[i] if i < len(codes) else '') for i, k in enumerate(kept)) + '\033[0m')
+        return [l for l in lines if l != '\033[0m']
 
 
 # -- git
@@ -1066,6 +1110,16 @@ class Canvas:
             lines.append(P.fg('hint') + clip(hint, full - 1) + '\033[0m')
         return lines, (ox, oy) != (round(tx), round(ty)) or self.source.busy()
 
+    def pane_lines(self, preview, room, height):
+        """The pane's lines, styled, for what preview() gave: text, a Picture, or a list of them."""
+        out = []
+        for part in preview if isinstance(preview, list) else [preview]:
+            if isinstance(part, Picture):
+                out += part.lines(room, max(4, min(height - 1, part.rows)), self.opts.truecolor)
+            elif part is not None:
+                out += [self.paint.fg('file') + line for line in wrap(str(part), room)]
+        return out
+
     def typing_line(self, w):
         """The open typing line: its prompt in a chip, then what's typed, the end of it if it's long."""
         prompt, text, _, choices = self.asking
@@ -1088,7 +1142,7 @@ class Canvas:
             self.scroll = sys.maxsize     # fetched again (refresh) with you at the end: stay there
         if self._preview[0] is not f or self._preview[1] != width:
             text = self.source.preview(f)
-            self._preview = (f, width, None if text is None else wrap(text, width - 3))
+            self._preview = (f, width, None if text is None else self.pane_lines(text, width - 3, height - 2))
         body = self._preview[2]
         room = width - 3
         self.page = max(1, height - 2)
@@ -1101,7 +1155,7 @@ class Canvas:
                 at = f' {self.scroll + 1}–{min(self.scroll + self.page, len(body))} of {len(body)} '
                 rule = clip('─' * max(0, room - cells(at) - 2) + at + '──', room)
             rows.append(P.fg('line', STRENGTH[5]) + rule)
-            rows += [P.fg('file') + line for line in body[self.scroll:self.scroll + self.page]]
+            rows += body[self.scroll:self.scroll + self.page]
         edge = P.fg('line', STRENGTH[4]) + '│ '
         return ['\033[0m' + edge + (rows[i] if i < len(rows) else '') + '\033[0m' for i in range(height)]
 

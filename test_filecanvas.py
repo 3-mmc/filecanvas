@@ -260,6 +260,27 @@ class Actions(unittest.TestCase):
         c = fc.Canvas('', options(provider=Acting({'dir': {'x': 1}})))
         self.assertNotIn('⌃R', screen(c)[-1])              # nothing to do on a branch
 
+
+class Pictures(unittest.TestCase):
+    def test_only_colours_get_through(self):
+        pic = fc.Picture('/x.png')
+        out = ('\x1b[?25l\x1b[0m\x1b[38;2;4;20;159m▄\x1b[2J\x1b]0;title\x07\x1b[48;5;12m▀\x1bc\x07x\n'
+               '\x1b[?25h\n')
+        self.assertEqual(pic.clean(out), ['\x1b[0m\x1b[38;2;4;20;159m▄\x1b[48;5;12m▀x\x1b[0m'])
+
+    def test_in_the_pane_beside_text_and_without_chafa_a_note(self):
+        class Shown(fc.Tree):
+            def preview(self, node):
+                return ['a photo:', fc.Picture('/nowhere/cat.jpg', rows=6), 'after']
+        c = fc.Canvas('', options(provider=Shown({'x': 1})))
+        real = fc.shutil.which
+        fc.shutil.which = lambda name: None
+        try:
+            text = screen(c, 100, 12)
+        finally:
+            fc.shutil.which = real
+        self.assertTrue(text[2].endswith('a photo:') and text[3].endswith('🖼 cat.jpg') and text[4].endswith('after'))
+
 class Wrap(unittest.TestCase):
     def test_breaks_at_spaces_and_cuts_long_words(self):
         self.assertEqual(fc.wrap('the quick brown fox', 10), ['the quick', 'brown fox'])
