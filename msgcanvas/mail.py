@@ -3,11 +3,11 @@ thread's messages as the tree of who replied to whom. The reading pane shows the
 
 Read from notmuch's index of the maildirs mbsync keeps (accounts.py); nothing here changes mail
 yet. A thread watches notmuch's revision, so mail that `msgcanvas sync` brings in appears."""
-import email, email.policy, email.utils, hashlib, html.parser, json, os, re, subprocess, threading, time, zlib
+import datetime, email, email.policy, email.utils, hashlib, html.parser, json, os, re, subprocess, threading, time, zlib
 
 import notmuch2
 
-from . import compose, files, treecanvas as fc
+from . import compose, files, later as later_, treecanvas as fc
 
 # Folders shown first, in this order, by the start of their name in English, German or Czech.
 BODY_WIDTH = 66       # columns a message's body wraps to on the canvas
@@ -193,7 +193,7 @@ class Mail(fc.Provider):
     messages, each with its replies; the message you're on opens onto what it says, on the
     canvas: its subject, who it's from and to (in their colours), when, its body, what's attached.
     `KINDS` are the node kinds it answers for."""
-    KINDS = ('account', 'folder', 'part', 'group', 'thread', 'message', 'subject', 'person', 'when', 'body', 'more',
+    KINDS = ('account', 'folder', 'part', 'snoozed', 'group', 'thread', 'message', 'subject', 'person', 'when', 'body', 'more',
              'attachment', 'drafts', 'draft')
     pane = True             # only for a message's pictures (pane_for)
     GROUPINGS = ('date', 'sender', 'all')
@@ -203,8 +203,9 @@ class Mail(fc.Provider):
               'flagged': (('Flagged', 'thread:{tag:flagged}'), ('The rest', 'not thread:{tag:flagged}'))}
 
     def __init__(self, accounts, watch=2.0, pick=None, notify=True, grouping='date', remember=None, split='none',
-                 beacon_days=30):
+                 beacon_days=30, later=None):
         self.accounts, self.notify = accounts, notify
+        self.later = later_.Later(later)        # threads snoozed, drafts to send later
         self.beacon_days = beacon_days          # unread mail newer than this is a beacon; older, just ●
         self.pick = pick or (lambda start: fc.pick(start, glyphs='plain'))   # a file, to attach
         self.remember_in = remember             # a file the grouping is kept in, from one time to the next
@@ -238,9 +239,11 @@ class Mail(fc.Provider):
         return f'{n} mail account{"s" if n != 1 else ""}', True
 
     def watch(self, every):
-        """Invalidate everything when notmuch's index changes (new mail, changed tags)."""
+        """Invalidate everything when notmuch's index changes (new mail, changed tags); bring back
+        what's snoozed, and send what's due, when their time comes."""
         while True:
             time.sleep(every)
+            self.due()
             try:
                 with database() as db:
                     r = db.revision()
@@ -295,6 +298,9 @@ class Mail(fc.Provider):
                 return self.groups(node) if self.grouping != 'all' else self.threads(node, node.data['query'])
             if k == 'group':
                 return self.threads(node, node.data['query'], node.data['tids'])
+            if k == 'snoozed':
+                return sorted(self.threads(node, ' or '.join(f'thread:{t}' for t in node.data['tids'])),
+                              key=lambda t: self.later.snoozed.get(t.data['tid'], [0])[0])
             if k == 'drafts':
                 return [self.draft_node(path, node) for path in compose.drafts(node.parent.data)]
             if k == 'thread' and node.data['count'] == 1:
@@ -319,16 +325,117 @@ class Mail(fc.Provider):
             root = db.path if isinstance(db.path, str) else str(db.path)
             nodes = []
             for rel in out:
-                q = 'folder:' + quote(os.path.relpath(os.path.join(a.maildir, rel), root))
+                q = 'folder:' + quote(os.path.relpath(os.path.join(a.maildir, rel), root)) + self.unsnoozed()
                 data = dict(query=q, rel=rel, total=db.count_messages(q),
                             unread=db.count_messages(q + ' and tag:unread'))
                 nodes.append(fc.Node(f'{node.path}/{rel}', folder_name(rel), True, node, 'folder', data=data))
+        sleeping = [t for t, (_, key, _) in self.later.snoozed.items() if key == a.key]
+        if sleeping:
+            nodes.append(fc.Node(f'{node.path}{SEP}snoozed', 'Snoozed', True, node, 'snoozed', data=dict(tids=sleeping)))
         kept = compose.drafts(a)
         if kept:
             nodes.append(fc.Node(f'{node.path}{SEP}drafts', 'Unsent', True, node, 'drafts', data=dict(count=len(kept))))
         if not nodes:
             raise OSError(0, 'no mail yet: msgcanvas sync')
         return nodes
+
+    # -- later: snoozing, sending later
+    def unsnoozed(self):
+        """What a folder's query leaves out: the threads snoozed."""
+        tids = list(self.later.snoozed)
+        return f' and not ({" or ".join(f"thread:{t}" for t in tids)})' if tids else ''
+
+    def thread_of(self, node):
+        while node is not None and node.kind != 'thread':
+            node = node.parent
+        return node
+
+    def folder_of(self, node):
+        while node is not None and node.kind != 'folder':
+            node = node.parent
+        return node
+
+    def due(self, now=None, wake=True):
+        """Bring back each thread whose snooze is over (a beacon from now, its folder and account
+        too, and a notification), and send each draft whose time has come (only that, unless
+        `wake`)."""
+        now = now or time.time()
+        back, send = self.later.due(now)
+        back = back if wake else []
+        if not back and not send:
+            return
+        for tid in back:
+            _, key, rel = self.later.snoozed.pop(tid)
+            self.later.woke[tid] = [now, key, rel]
+            subject = ''
+            try:
+                with database() as db:
+                    subject = next(iter(db.threads(f'thread:{tid}')), None)
+                    subject = subject.subject if subject else ''
+            except Exception:
+                pass
+            if self.notify:
+                files.notify('Back from snooze', subject or '(no subject)')
+            self.pulse('/' + key)
+        for path in send:
+            _, key = self.later.sending.pop(path)
+            a = next((x for x in self.accounts if x.key == key), None)
+            subject = compose.parse(path)[0].get('Subject') or '(no subject)' if os.path.exists(path) else ''
+            if a is None or not os.path.exists(path):
+                continue
+            try:
+                compose.send(path, a)
+                self.status('send:' + path, f'sent {fc.clip(subject, 30)}', 'ok')
+            except (OSError, ValueError, subprocess.SubprocessError) as e:
+                self.status('send:' + path, f'not sent {fc.clip(subject, 24)}: kept in Unsent', 'failed')
+                if self.notify:
+                    files.notify('Not sent', f'{subject}: {e}')
+        self.later.save()
+        self.invalidate()
+
+    def next_change(self):
+        return self.later.next()
+
+    def snooze(self, canvas, node):
+        t, f, a = self.thread_of(node), self.folder_of(node), self.account_of(node)
+
+        def done(text):
+            when = later_.parse(text)
+            if when is None:
+                canvas.say(f'when is that? say {later_.SAYS}')
+                return None
+            self.later.snoozed[t.data['tid']] = [when.timestamp(), a.key, f.data['rel'] if f else '']
+            self.later.woke.pop(t.data['tid'], None)
+            self.later.save()
+            self.invalidate()           # out of its folder, its groups, its counts: all of it again
+            canvas.say(f'snoozed until {later_.say(when)}: it comes back then')
+        canvas.ask(f'snooze until ({later_.SAYS})', done)
+
+    def send_later(self, canvas, a, path):
+        def done(text):
+            when = later_.parse(text)
+            if when is None:
+                canvas.say(f'when is that? say {later_.SAYS}')
+                return None
+            self.later.sending[path] = [when.timestamp(), a.key]
+            self.later.save()
+            self.invalidate('/' + a.key)
+            self.invalidate('/' + a.key + SEP + 'drafts')
+            canvas.say(f'sends {later_.say(when)}, while msgcanvas is open (or `msgcanvas send-due`)')
+        canvas.ask(f'send when ({later_.SAYS})', done)
+
+    def woke_in(self, key, rel=None, tids=None):
+        """When the latest thread back from snooze came back, in an account (a folder of it, some
+        threads); None if none is."""
+        got = [w for tid, (w, k, r) in self.later.woke.items()
+               if k == key and (rel is None or r == rel) and (tids is None or tid in tids)]
+        return max(got) if got else None
+
+    def focus(self, node):
+        """Looking at a thread back from snooze: it's back, and stops calling."""
+        t = self.thread_of(node) if node.kind in self.KINDS else None
+        if t is not None and self.later.woke.pop(t.data['tid'], None):
+            self.later.save()
 
     def parts(self, node):
         """A folder split in two before it's grouped (Unread / Read, or Flagged / The rest); a part
@@ -470,6 +577,14 @@ class Mail(fc.Provider):
         if k == 'part':          # what's in it: unread ones stand out, as a folder's do
             return (f'{d["total"]:,}', 'git_dirty', True) if d['unread'] == d['total'] else \
                 (f'{d["total"]:,}', 'git_staged' if d['flagged'] else 'stub', d['flagged'])
+        if k == 'thread' and node.parent is not None and node.parent.kind == 'snoozed':
+            until = self.later.snoozed.get(d['tid'], [None])[0]
+            return (f'until {later_.say(datetime.datetime.fromtimestamp(until).astimezone())}', 'stub', False) if until else None
+        if k == 'draft' and d['path'] in self.later.sending:
+            when = datetime.datetime.fromtimestamp(self.later.sending[d['path']][0]).astimezone()
+            return f'sends {later_.say(when)}', 'git_staged', True
+        if k == 'snoozed':
+            return str(len(d['tids'])), 'stub', False
         if k == 'thread' and d['count'] > 1:
             return str(d['count']), 'stub', False
         if k == 'person' and d['address']:
@@ -518,12 +633,21 @@ class Mail(fc.Provider):
     def beacon(self, node):
         """Unread threads and messages as beacons: blinking while they're new, then lit, for
         beacon_days; older unread mail just keeps its ●."""
-        came = None
-        if node.kind == 'thread' and node.data['unread']:
-            came = newest_unread(node.data['messages'])
+        came, back = None, None
+        if node.kind == 'thread':
+            came = newest_unread(node.data['messages']) if node.data['unread'] else None
+            back = (self.later.woke.get(node.data['tid']) or [None])[0]
         elif node.kind == 'message' and node.data['unread']:
             came = node.data['date']
-        return came if came and time.time() - came < self.beacon_days * 86400 else None
+        elif node.kind == 'account':                    # holding a thread back from snooze
+            back = self.woke_in(node.data.key)
+        elif node.kind == 'folder':
+            back = self.woke_in(self.account_of(node).key, node.data['rel'])
+        elif node.kind == 'group':
+            back = self.woke_in(self.account_of(node).key, tids=set(node.data['tids']))
+        came = came if came and time.time() - came < self.beacon_days * 86400 else None
+        got = [t for t in (came, back) if t]
+        return max(got) if got else None
 
     def mark_before(self, node):
         return node.kind in ('part', 'group', 'thread', 'message')     # unread, before the subject, as tuido's states
@@ -601,8 +725,14 @@ class Mail(fc.Provider):
         if node.kind in ('drafts',):
             return [('\x0e', 'new', '⌃N new')]
         if node.kind == 'draft':
-            return [('\x05', 'edit', '⌃E edit'), ('\x04', 'discard', '⌃D throw away'), ('\x0e', 'new', '⌃N new')]
+            later = ('\x1a', 'unschedule', "⌃Z don't send later") if node.data['path'] in self.later.sending else \
+                ('\x1a', 'later', '⌃Z send later')
+            return [('\x05', 'edit', '⌃E edit'), later, ('\x04', 'discard', '⌃D throw away'), ('\x0e', 'new', '⌃N new')]
         out = [('\x0e', 'new', '⌃N new')]
+        t = self.thread_of(node)
+        if t is not None:
+            out.append(('\x1a', 'wake', '⌃Z wake now') if t.data['tid'] in self.later.snoozed else
+                       ('\x1a', 'snooze', '⌃Z snooze'))
         path = self.message_path(node)
         if path:
             out += [('\x12', 'reply', '⌃R reply'), ('\x01', 'reply-all', '⌃A reply all'),
@@ -631,6 +761,19 @@ class Mail(fc.Provider):
                     self.invalidate(node.parent.parent.path)
                     canvas.say('thrown away')
             canvas.ask('throw this draft away?  y yes  n no', done, choices='yn')
+        elif name == 'snooze':
+            self.snooze(canvas, node)
+        elif name == 'wake':
+            self.later.snoozed[self.thread_of(node).data['tid']][0] = 0      # due now: due() brings it back
+            self.due()
+            canvas.say('back')
+        elif name == 'later':
+            self.send_later(canvas, a, node.data['path'])
+        elif name == 'unschedule':
+            self.later.sending.pop(node.data['path'], None)
+            self.later.save()
+            self.invalidate(node.parent.path)
+            canvas.say('kept in Unsent, not sent later')
         elif name == 'group':
             self.grouping = self.next_grouping()
             self.keep()
@@ -691,6 +834,8 @@ class Mail(fc.Provider):
                         compose.attach(path, chosen)
                     self.after_edit(canvas, a, path)
                 canvas.outside(choose)
+            elif k == 'l':
+                self.send_later(canvas, a, path)
             elif k == 'd':
                 canvas.say('kept in Unsent')
             elif k == 'q':
@@ -698,8 +843,8 @@ class Mail(fc.Provider):
                 canvas.say('thrown away')
             self.invalidate(account_node)
             self.invalidate(account_node + SEP + 'drafts')
-        canvas.ask(f'to {fc.clip(to, 40)}{extra}:  y send  e edit  a attach  d keep for later  q throw away',
-                   done, choices='yeadq')
+        canvas.ask(f'to {fc.clip(to, 40)}{extra}:  y send  l later  e edit  a attach  d keep  q throw away',
+                   done, choices='yleadq')
 
     def attached(self, canvas, path, then):
         """then(file) for one of the message's attachments: the only one, or the one you pick."""

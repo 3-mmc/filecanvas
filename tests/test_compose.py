@@ -107,6 +107,34 @@ class Drafts(unittest.TestCase):
         with open(str(copy.path), 'rb') as f:
             self.assertNotIn(b'secret@x.org', f.read())                                  # nor does the copy
 
+    def test_a_draft_sent_later_goes_when_its_time_comes(self):
+        import time
+        from msgcanvas import treecanvas as fc
+        kept = os.path.join(compose.DRAFTS, '..', 'later-test.json')
+        self.addCleanup(lambda: os.path.exists(kept) and os.remove(kept))
+        a = account()
+        path = compose.new(a, to='Ann <ann@x.org>', subject='Later one', body='hi')
+        p = mail.Mail([a], watch=0, later=kept)
+        c = fc.Canvas('home', fc.options(provider=p, backdrop='off', ease=1, glyphs='plain', colmax=40))
+        p.send_later(c, a, path)
+        for k in 'tomorrow 9':
+            fc.apply(c, k, c.opts)
+        fc.apply(c, '\r', c.opts)
+        self.assertIn(path, p.later.sending)
+        unsent = next(k for k in c.root.load()[0].load() if k.kind == 'drafts')
+        draft = unsent.load()[0]
+        self.assertEqual(p.count(draft), ('sends tomorrow 9:00', 'git_staged', True))
+        self.assertEqual(p.actions(draft)[1][2], "⌃Z don't send later")
+        p.due(time.time() + 3600)                       # not yet
+        self.assertTrue(os.path.exists(path))
+        self.assertAlmostEqual(p.next_change(), p.later.sending[path][0])
+        p.due(time.time() + 2 * 86400)                  # now
+        self.assertFalse(os.path.exists(path))          # sent: the draft's gone
+        with open(OUT, 'rb') as f:
+            self.assertIn(b'Subject: Later one', f.read())
+        self.assertEqual([s[3] for s in p.signals() if s[0] == 'status'], ['ok'])
+        self.assertEqual(p.later.sending, {})
+
     def test_a_failed_send_says_why_and_keeps_the_draft(self):
         compose.SEND = ['sh', '-c', 'echo "msmtp: authentication failed (method PLAIN)" >&2; exit 77']
         p = compose.new(account(), to='ann@x.org', subject='x', body='y')

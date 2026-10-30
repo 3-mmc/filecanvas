@@ -5,6 +5,7 @@
     msgcanvas import-thunderbird   add the accounts Thunderbird has (not its passwords)
     msgcanvas login NAME [--paste] store an account's password (pass), or sign in (OAuth)
     msgcanvas sync [NAME]          fetch new mail (mbsync), then index it (notmuch new)
+    msgcanvas send-due             send the drafts whose time has come (⌃Z send later), for cron
     msgcanvas chat-setup           add a chat account (WhatsApp, Signal, Instagram) with nchat
 """
 import os, shutil, subprocess, sys
@@ -124,7 +125,7 @@ def browse(start):
         if found:
             defaults = accounts.load()[0]
             providers.append(mail.Mail(found, notify=defaults.get('notify', True), remember=state('mail-view.json'),
-                                             beacon_days=defaults.get('beacon_days', 30)))
+                                             beacon_days=defaults.get('beacon_days', 30), later=state('later.json')))
     c = accounts.chat_settings()
     if c['enabled'] and shutil.which(c['nchat']) and chat.has_profiles(c['confdir'] or chat.confdir()):
         providers.append(chat.Chat(c['nchat'], c['confdir'], state('nchat-serve.log'), read_receipts=c['read_receipts'],
@@ -147,6 +148,17 @@ def browse(start):
         for p in providers:
             if hasattr(p, 'serve'):
                 p.serve.close()
+
+
+def send_due():
+    """Send the drafts whose time has come, and leave (from cron, say, when msgcanvas isn't open)."""
+    from . import mail
+    p = mail.Mail(configured(), watch=0, notify=False, later=state('later.json'))
+    p.due(wake=False)
+    sent = [s for s in p.signals() if s[0] == 'status']
+    for _, _, text, how in sent:
+        print(('✓ ' if how == 'ok' else '✗ ') + text)
+    sys.exit(1 if any(s[3] == 'failed' for s in sent) else 0)
 
 
 def chat_setup():
@@ -176,9 +188,11 @@ def main(argv=None):
         import_thunderbird()
     elif cmd == 'login' and len(argv) in (2, 3) and argv[2:] in ([], ['--paste']):
         login(argv[1], paste=argv[2:] == ['--paste'])
+    elif cmd == 'send-due' and len(argv) == 1:
+        send_due()
     elif cmd == 'sync' and len(argv) <= 2:
         sync(argv[1] if len(argv) == 2 else None)
-    elif len(argv) <= 1 and cmd not in ('login', 'sync', 'import-thunderbird', 'chat-setup'):
+    elif len(argv) <= 1 and cmd not in ('login', 'sync', 'import-thunderbird', 'chat-setup', 'send-due'):
         browse(cmd)
     else:
         sys.exit(__doc__.strip())

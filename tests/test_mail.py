@@ -2,7 +2,7 @@
 makes. Needs notmuch and python3-notmuch2.
 
     python3 -m unittest discover tests"""
-import atexit, contextlib, io, os, re, shutil, subprocess, tempfile, textwrap, time, unittest
+import atexit, contextlib, io, json, os, re, shutil, subprocess, tempfile, textwrap, time, unittest
 
 from tests import TMP                            # the private home every test runs in
 from msgcanvas import accounts, treecanvas as fc, mail
@@ -292,6 +292,35 @@ class Provider(unittest.TestCase):
         self.assertIsNone(c.source.beacon(next(k for k in c.focus.parent.shown() if k.label() == 'Your pass')))
         c.source.beacon_days = (time.time() - bo.data['date']) / 86400 - 1     # older than that: just ●
         self.assertIsNone(c.source.beacon(kiln))
+
+    def test_z_snoozes_a_thread_out_of_its_folder_until_it_comes_back(self):
+        kept = os.path.join(TMP, 'later.json')
+        self.addCleanup(lambda: os.path.exists(kept) and os.remove(kept))
+        p = mail.Mail(self.accounts, watch=0, grouping='all', later=kept)
+        c = fc.Canvas('home/INBOX', fc.options(provider=p, backdrop='off', ease=1, glyphs='plain', colmax=40))
+        self.assertEqual(c.focus.label(), 'Your pass')
+        self.press(c, '\x1a', *'soon', '\r')                       # nonsense: it says how, and nothing's snoozed
+        self.assertIn('when is that?', '\n'.join(self.screen(c)))
+        self.press(c, '\x1a', *'tomorrow 9', '\r')
+        self.screen(c)
+        inbox = c.focus.parent if c.focus.kind == 'thread' else c.focus
+        account = inbox.parent
+        self.assertEqual([k.label() for k in inbox.shown()], ['Kiln quote'])            # gone from the inbox
+        snoozed = next(k for k in account.shown() if k.kind == 'snoozed')
+        self.assertEqual([k.label() for k in snoozed.load()], ['Your pass'])
+        self.assertEqual(p.count(snoozed.load()[0])[0], 'until tomorrow 9:00')
+        with open(kept) as f:
+            self.assertEqual(json.load(f)['snoozed'][snoozed.load()[0].data['tid']][1:], ['home', 'INBOX'])
+        p.due(time.time() + 2 * 86400)                                  # its time comes
+        self.screen(c)
+        back = next(k for k in inbox.shown() if k.label() == 'Your pass')
+        self.assertIsNotNone(p.beacon(back))                            # back, calling
+        self.assertIsNotNone(p.beacon(inbox))
+        self.assertIsNotNone(p.beacon(account))
+        self.assertFalse(any(k.kind == 'snoozed' for k in account.shown()))
+        p.focus(back)                                                   # looked at: it stops
+        self.assertIsNone(p.beacon(back))
+        self.assertIsNone(p.beacon(inbox))
 
     def test_the_grouping_is_remembered(self):
         kept = os.path.join(TMP, 'view.json')

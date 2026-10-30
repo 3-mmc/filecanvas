@@ -10,6 +10,15 @@ after an hour; for `beacon_days`, 30 unless `[defaults]` says, then just ●), g
 onto what it says, on the canvas: its subject, who it's from and to (each in their colour, their
 address beside), when, its body a paragraph at a time (a long one's start, then **↓ more**), and
 what's attached. Pictures show in a pane beside.
+
+**Later (⌃Z).** On a thread, ⌃Z snoozes it: say when (`2h`, `tonight`, `tomorrow 9`, `mon`,
+`3 nov 14:00`; a day alone is its morning, 8:00), and it leaves its folder for the account's
+**Snoozed** branch (each with when it wakes) until then, when it comes back a beacon, its folder
+and account too, with a notification, until you look at it. ⌃Z there wakes it now. On a draft (or
+`l` after writing one), ⌃Z sends it later: it waits in Unsent saying when, and goes then, while
+msgcanvas is open; `msgcanvas send-due` (from cron, say) sends what's due when it isn't. Snoozes
+are msgcanvas's own (`~/.local/state/msgcanvas/later.json`): nothing changes in notmuch or on the
+server.
 Drawn by [treecanvas](https://github.com/3-mmc/treecanvas) through its
 providers, vendored here (`tools/vendor-treecanvas.py`).
 
