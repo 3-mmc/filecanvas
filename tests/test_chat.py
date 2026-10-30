@@ -138,7 +138,7 @@ class Events(unittest.TestCase):
         p.asked_chats = True
         profile = fc.Node(chat.profile_id('W_1'), 'WhatsApp', True, None, 'profile', source=c, data=p)
         kids = c.children(profile)
-        self.assertEqual([(k.kind, k.name) for k in kids], [('pinned', 'Pinned'), ('chat', 'Bo'), ('chat', 'Old')])
+        self.assertEqual([(k.kind, k.name) for k in kids], [('pinned', 'Pinned'), ('chat', 'Bo'), ('archived', 'Archive')])
         pinned = kids[0]
         self.assertEqual([k.name for k in c.children(pinned)], ['Cy', 'Ann'])     # the latest first
         self.assertEqual(c.children(pinned)[0].path, chat.chat_id('W_1', 'cy'))  # the same chat, wherever it is
@@ -303,6 +303,65 @@ class Behaviour(unittest.TestCase):
             say({'event': 'sent', 'profile': 'W_1', 'chat': 'ann', 'ok': True, 'message': msg(i, True)})
             screen(canvas)
             self.assertEqual(shown(), [f'line {n}' for n in range(1, i + 1)])
+
+    def test_local_pinning_archiving_and_restore_survive_server_refresh(self):
+        remember = os.path.join(TMP, 'local-chat-view.json')
+        self.c.remember_in = remember
+        canvas = fc.Canvas('', options(self.c))
+        profile = canvas.root.load()[0]
+        cid = chat.chat_id(self.p.id, 'ann')
+        canvas.go([profile.path, cid])
+        press(canvas, '\x10')
+        screen(canvas)
+        self.assertFalse(self.p.chats['ann'].get('pinned'))  # no server mutation
+        profile = canvas.root.load()[0]
+        pinned = profile.load()[0]
+        self.assertEqual((pinned.kind, pinned.load()[0].path), ('pinned', cid))
+        canvas.go([profile.path, pinned.path, cid])
+        press(canvas, '\x19')
+        screen(canvas)
+        profile = canvas.root.load()[0]
+        self.assertNotIn('ann', [n.data[1] for n in profile.load() if n.kind == 'chat'])
+        archive = next(n for n in profile.load() if n.kind == 'archived')
+        archived = archive.load()[0]
+        self.assertEqual(archived.path, cid)
+        self.assertFalse(self.p.chats['ann'].get('archived'))
+        self.assertIsNone(self.c.beacon(archived))
+        self.feed({'event': 'messages', 'chat': 'ann', 'messages': [
+            {'id': 'hidden', 'sender': 'ann', 'text': 'silent', 'time': time.time() * 1000}]})
+        self.assertFalse(self.notified)
+        other = chat.Chat(serve=self.s, remember=remember)
+        self.assertTrue(other.chat_view(self.p, self.p.chats['ann'])['archived'])
+        self.assertTrue(other.chat_view(self.p, self.p.chats['ann'])['pinned'])
+        self.assertFalse([op for op, _ in self.asked if op in ('pin_chat', 'archive_chat')])
+        canvas.go([profile.path, archive.path, cid])
+        press(canvas, '\x19')
+        screen(canvas)
+        profile = canvas.root.load()[0]
+        self.assertEqual(profile.load()[0].kind, 'pinned')
+        self.assertFalse(any(n.kind == 'archived' for n in profile.load()))
+        pinned = profile.load()[0]
+        canvas.go([profile.path, pinned.path, cid])
+        press(canvas, '\x10')
+        screen(canvas)
+        self.assertFalse(any(n.kind == 'pinned' for n in canvas.root.load()[0].load()))
+        self.assertEqual(chat.Chat(serve=self.s, remember=remember).grouping, 'all')
+
+    def test_sender_chip_only_colours_the_name_even_when_selected(self):
+        self.p.messages['ann'] = {'x': dict(id='x', sender='ann', text='hello', time=time.time() * 1000)}
+        canvas = fc.Canvas('', options(together.Together([('Messages', self.c)])))
+        section = canvas.root.load()[0]
+        canvas.go([section.path, chat.profile_id(self.p.id), chat.chat_id(self.p.id, 'ann')])
+        press(canvas, 'right')
+        raw, _ = canvas.frame(140, 30, animate=False)
+        run = canvas.focus
+        self.assertEqual(run.kind, 'run')
+        self.assertEqual(canvas.source.chip_rows(run), 1)
+        clock = self.c.message_meta(self.p.messages['ann']['x'])
+        # The metadata row has foreground only, without the selection/sender background.
+        row = next(line for line in raw if clock in ANSI.sub('', line))
+        metadata = row[:row.index(clock)].rsplit('\x1b[0m', 1)[-1]
+        self.assertNotIn('48;', metadata)
 
     def test_sending_spins_then_ticks_or_fails(self):
         canvas = fc.Canvas('', options(fc.Tree({})))

@@ -688,6 +688,10 @@ class Provider:
         """(fg, bg) to draw `node` as a chip, as the bar draws its path; None for plain text."""
         return None
 
+    def chip_rows(self, node):
+        """How many label lines wear the chip; None means the whole label."""
+        return None
+
     def count(self, node):
         """A number for `node` (unread mail, say), (text, colour, bold): the column of them is
         right-aligned after the column's names, so they line up to be read down. None for none."""
@@ -967,11 +971,25 @@ class Stub:
         return self.text
 
 
-def window(node, limit):
+def window(node, limit, anchors=None):
     """The children drawn for an open node: all of them, or at most `limit` around the selected one."""
     items = node.shown()
     if not items:
         return [Stub('(' + (node.error or ('no match' if node.filter else 'empty')) + ')', node)]
+    if anchors is not None and items:
+        # Keep a little context at every reference, collapsing the rows between them.
+        centers = [i for i, k in enumerate(items) if id(k) in anchors]
+        centers.append(max(0, min(node.sel, len(items) - 1)))
+        keep = {j for i in centers for j in range(max(0, i - 1), min(len(items), i + 2))}
+        out, previous = [], -1
+        for i in sorted(keep):
+            if i > previous + 1:
+                out.append(Stub(f'… {i - previous - 1} more', node))
+            out.append(items[i])
+            previous = i
+        if previous < len(items) - 1:
+            out.append(Stub(f'… {len(items) - previous - 1} more', node))
+        return out
     if not limit or len(items) <= limit:
         return items
     start = max(0, min(node.sel - limit // 2, len(items) - limit))
@@ -987,17 +1005,18 @@ def is_open(n, focus, peek):
     return n.is_dir and (n.open or (peek and n is focus))
 
 
-def layout(n, opts, focus, tall=lambda n: 1):
+def layout(n, opts, focus, tall=lambda n: 1, anchors=None):
     """Rows relative to `n` for its subtree; returns its contour: [(top, bottom)] per depth.
     tall(node): how many lines it takes."""
     h = tall(n)
-    if not is_open(n, focus, opts.peek):
+    if not is_open(n, focus, opts.peek) or anchors is not None and id(n) not in anchors:
+        n._shown = []
         return [(0, h - 1)]
-    kids = window(n, opts.limit)
+    kids = window(n, opts.limit, anchors)
     n._shown = kids
     acc, ys = [], []
     for k in kids:
-        c = layout(k, opts, focus, tall)
+        c = layout(k, opts, focus, tall, anchors)
         y = ys[-1] + 1 if ys else 0
         for d in range(min(len(acc), len(c))):
             # Keep clear of what's already placed at every depth; a blank row between cousins.
@@ -1047,6 +1066,7 @@ class Canvas:
         else:
             self.focus = node
         self.backdrop = opts.backdrop if isinstance(opts.backdrop, dict) else {}
+        self.bookmarks = {}   # slot: (tuple of ids from the root, short label)
         self.cam = None       # (x, y) world position of the top-left corner, floats
         self.target = None
         self.pane = self.source.pane if opts.pane is None else opts.pane
@@ -1216,6 +1236,64 @@ class Canvas:
         self.focus = node
         return True
 
+    def chain(self, node):
+        ids = []
+        while node.parent is not None:
+            ids.append(node.path)
+            node = node.parent
+        return tuple(reversed(ids))
+
+    def bookmark_node(self, ids):
+        node = self.root
+        for path in ids:
+            node = next((k for k in node.load() if k.path == path), None)
+            if node is None:
+                # A provider may regroup a stable id under a different date/sender branch.
+                stack = [self.root]
+                while stack:
+                    at = stack.pop()
+                    if at.path == ids[-1]:
+                        return at
+                    stack.extend(at.kids or ())
+                return None
+        return node
+
+    def bookmark(self, slot, replace=False):
+        self.refresh()
+        if replace or slot not in self.bookmarks:
+            if isinstance(self.focus, Stub):
+                return
+            self.bookmarks[slot] = (self.chain(self.focus), self.focus.label().splitlines()[0])
+            self.say(f'F{slot} saved · Shift+F{slot} replaces · F6 clears all')
+            return
+        ids, label = self.bookmarks[slot]
+        node = self.bookmark_node(ids)
+        if node is None:
+            self.say(f'F{slot}: {label} is unavailable · Shift+F{slot} replaces it')
+        else:
+            self.go(self.chain(node))
+            self.scroll = 0
+            self.source.pulse(node.path)
+
+    def reference_nodes(self):
+        return {slot: n for slot, (ids, _) in self.bookmarks.items()
+                if (n := self.bookmark_node(ids)) is not None}
+
+    def reference_paths(self, references):
+        on = set()
+        for n in [self.focus, *references.values()]:
+            while n:
+                on.add(id(n))
+                if n.parent is not None:
+                    n.parent.open = True
+                n = n.parent
+        return on
+
+    def bookmark_hint(self):
+        slots = '  '.join(f'F{i} {clip(self.bookmarks[i][1], 10)}' if i in self.bookmarks else f'F{i} save'
+                          for i in range(1, 6))
+        return slots + '  ⇧F replace  F6 clear' if self.bookmarks else 'F1–5 save/jump'
+
     def siblings(self):
         p = self.focus.parent
         return p.shown() if p else [self.focus]
@@ -1226,7 +1304,8 @@ class Canvas:
         if not p or not sib:
             return
         i = (sib.index(self.focus) + step) % len(sib) if self.focus in sib else 0
-        if self.opts.fold and self.focus.open:
+        protected = self.reference_paths(self.reference_nodes()) if self.bookmarks else set()
+        if self.opts.fold and self.focus.open and id(self.focus) not in protected:
             self.focus.open = False
         p.sel, self.focus = i, sib[i]
 
@@ -1263,7 +1342,7 @@ class Canvas:
         # nothing matches: focus stays where it was, the column shows "(no match)"
 
     def fold(self):
-        on = set()
+        on = self.reference_paths(self.reference_nodes()) if self.bookmarks else set()
         n = self.focus
         while n:
             on.add(id(n)); n = n.parent
@@ -1298,6 +1377,11 @@ class Canvas:
         shows = isinstance(self.focus, Stub) or self.source.pane_for(self.focus)
         pane_w = int(w * o.pane_width) if self.pane and w >= 60 and shows else 0
         w -= pane_w
+        references = self.reference_nodes()
+        anchors = self.reference_paths(references) if self.bookmarks else None
+        slots = {}
+        for slot, n in references.items():
+            slots.setdefault(id(n), []).append(str(slot))
         drawn = {}
 
         def lines_of(n):
@@ -1306,10 +1390,12 @@ class Canvas:
             if got is None:
                 width = None if isinstance(n, Stub) else self.source.width(n)
                 text = n.label()
+                if id(n) in slots:
+                    text = '[F' + ',F'.join(slots[id(n)]) + '] ' + text
                 got = wrap(text, width) if width else [clip(printable(l), o.colmax) for l in text.split('\n')]
                 drawn[id(n)] = got = got or ['']
             return got
-        layout(self.root, o, self.focus, lambda n: len(lines_of(n)))
+        layout(self.root, o, self.focus, lambda n: len(lines_of(n)), anchors)
         nodes = []
         place(self.root, 0, 0, self.focus, o, nodes)
 
@@ -1348,6 +1434,9 @@ class Canvas:
         while n:
             path.add(id(n)); n = n.parent
 
+        if anchors is not None:
+            path.update(anchors)
+
         # Camera: keep the focus inside a box round the middle (a fraction of the view).
         view_h = h - 2 - (1 if o.header else 0)
         fx, fy = xs[self.focus.depth], self.focus.row
@@ -1361,6 +1450,25 @@ class Canvas:
             tx = fx - (aim_x - half_w if sx < aim_x - half_w else aim_x + half_w)
         if not aim_y - half_h <= sy <= aim_y + half_h:
             ty = fy - (aim_y - half_h if sy < aim_y - half_h else aim_y + half_h)
+        if references:
+            # Fit as many references as possible, retaining the current camera whenever it fits.
+            # The active label always wins if the whole constellation is too large.
+            shown_ids = {id(n) for n in nodes}
+            active_width = max(cells(l) for l in lines_of(self.focus)) + 4
+            left, right = fx, fx + min(active_width, max(1, w - 4))
+            top, bottom = fy, fy + min(len(lines_of(self.focus)), max(1, view_h - 2))
+            nearby = sorted(references.values(), key=lambda n: abs(n.row - fy) + abs(xs[n.depth] - fx))
+            for n in nearby:
+                if id(n) not in shown_ids:
+                    continue
+                x, y = xs[n.depth], n.row
+                bounds = (min(left, x), max(right, x + max(cells(l) for l in lines_of(n)) + 4),
+                          min(top, y), max(bottom, y + len(lines_of(n))))
+                if bounds[1] - bounds[0] <= w - 4 and bounds[3] - bounds[2] <= view_h - 2:
+                    left, right, top, bottom = bounds
+            tx, ty = self.target or self.cam
+            tx = max(right - w + 2, min(tx, left - 2))
+            ty = max(bottom - view_h + 1, min(ty, top - 1))
         self.target = (tx, ty)
         cx, cy = self.cam
         if not animate or o.ease >= 1:
@@ -1424,11 +1532,16 @@ class Canvas:
             mark, chip = marks[id(n)][0], chips[id(n)]
             if n is self.focus or chip:      # a block: the choice in its colours, a chip in its own
                 fg, bg = ('sel_fg', 'sel_bg') if n is self.focus else chip
+                chip_rows = None if isinstance(n, Stub) else self.source.chip_rows(n)
+                chip_width = widest if chip_rows is None else max(cells(l) for l in lines[:chip_rows])
                 for i, l in enumerate(lines):
-                    put(x, n.row + i, ' ' + l + ' ' * (widest - cells(l) + 1), P.on(fg, bg, True))
+                    if chip_rows is None or i < chip_rows:
+                        put(x, n.row + i, ' ' + l + ' ' * (chip_width - cells(l) + 1), P.on(fg, bg, True))
+                    else:
+                        put(x + 1, n.row + i, l, P.fg('stub'))
                 if cap_l:
                     put(x - 1, n.row, cap_l, P.fg(bg))
-                cur = x + widest + 2
+                cur = x + chip_width + 2
                 if cap_r:
                     put(cur, n.row, cap_r, P.fg(bg))
                     cur += 1
@@ -1489,7 +1602,7 @@ class Canvas:
                 strength_of_line = STRENGTH[min(dist(n) * 2, len(STRENGTH) - 1)]
                 own = {k.row: P.fg(c, strength_of_line) for k in kids     # a child's own colour, into it
                        if not isinstance(k, Stub) and (c := self.source.line(k)) is not None}
-                chosen = next((k for k in kids if id(k) in path), None) if hot else None
+                chosen = [k for k in kids if id(k) in path] if hot else []
                 for y in range(min(top, n.row), max(bot, n.row) + 1):
                     if y == n.row:
                         ch = ('─' if top == bot else '┬' if y == top else '┴' if y == bot else '┼') if y in rows else '┤'
@@ -1498,10 +1611,10 @@ class Canvas:
                     else:
                         ch = '│'
                     # the lit part of the spine runs from the parent's row to the chosen child's
-                    on = chosen is not None and min(n.row, chosen.row) <= y <= max(n.row, chosen.row)
+                    on = any(min(n.row, k.row) <= y <= max(n.row, k.row) for k in chosen)
                     put(spine, y, ch, lit if on else own.get(y, line))
                 for k in kids:
-                    put(spine + 1, k.row, '─', lit if chosen is k else own.get(k.row, line))
+                    put(spine + 1, k.row, '─', lit if k in chosen else own.get(k.row, line))
 
         self.backdrop_under(grid, 1 if o.header else 0)
         lines = [o.header(full)] if o.header else []
@@ -1521,7 +1634,7 @@ class Canvas:
             lines.append(P.fg('hint') + hint[:full - 1] + '\033[0m')
         else:
             acts = [h for _, _, h in self.source.actions(self.focus) if h] if not isinstance(self.focus, Stub) else []
-            hint = '  '.join(acts + ['↑↓ move  →/tab open  ← parent  type filter  ⌃X fold  ' +
+            hint = '  '.join([self.bookmark_hint()] + acts + ['↑↓ move  →/tab open  ← parent  type filter  ⌃X fold  ' +
                                      ('pgup/pgdn scroll  ' if pane_w else '') + '⏎ choose  esc cancel'])
             lines.append(P.fg('hint') + clip(hint, full - 1) + '\033[0m')
         # motion begun while drawing (a pane's reveal) counts too: the next frame must follow
@@ -1778,7 +1891,8 @@ def init(shell, cmd='cdi', key='ctrl-t', run=None):
 
 CSI = re.compile(r'\x1b\[([0-9;]*)([A-Za-z~])|\x1bO([A-Za-z])')
 ARROWS = {'A': 'up', 'B': 'down', 'C': 'right', 'D': 'left', 'H': 'home', 'F': 'end'}
-TILDES = {'1': 'home', '7': 'home', '4': 'end', '8': 'end', '3': 'delete', '2': 'insert', '5': 'pgup', '6': 'pgdn'}
+FUNCTIONS = {'P': 'f1', 'Q': 'f2', 'R': 'f3', 'S': 'f4'}
+TILDES = {'11': 'f1', '12': 'f2', '13': 'f3', '14': 'f4', '15': 'f5', '17': 'f6', '1': 'home', '7': 'home', '4': 'end', '8': 'end', '3': 'delete', '2': 'insert', '5': 'pgup', '6': 'pgdn'}
 MODS = {'2': 'shift-', '3': 'alt-', '4': 'alt-shift-', '5': 'ctrl-', '6': 'ctrl-shift-', '7': 'ctrl-alt-', '8': 'ctrl-alt-shift-'}
 
 
@@ -1803,10 +1917,14 @@ def keys(data):
         if ss3:
             if ss3 in ARROWS:
                 yield ARROWS[ss3]
+            elif ss3 in FUNCTIONS:
+                yield FUNCTIONS[ss3]
             continue
         parts = params.split(';')
         mod = MODS.get(parts[1], '') if len(parts) > 1 else ''
-        if final in ARROWS:
+        if final in FUNCTIONS and parts[0] in ('', '1'):
+            yield mod + FUNCTIONS[final]
+        elif final in ARROWS:
             yield mod + ARROWS[final]
         elif final == 'Z':
             yield 'backtab'
@@ -1826,6 +1944,13 @@ def apply(c, k, opts):
     if k in acts:
         done = c.source.act(c.focus, acts[k], c)
         return None if done is None else ('done', done)
+    if re.fullmatch(r'(shift-)?f[1-5]', k):
+        c.bookmark(int(k[-1]), replace=k.startswith('shift-'))
+        return None
+    if k in ('f6', '\x02'):
+        c.bookmarks.clear()
+        c.say('bookmarks cleared')
+        return None
     if k in ('\r', '\n'):
         chosen = c.source.choose(c.focus)
         if chosen is STAY:

@@ -33,6 +33,9 @@ Python 3, no dependencies. Linux, macOS, WSL.
 | ⌃X | fold every branch off the current path |
 | PgUp PgDn | scroll the reading pane (`--pane`) |
 | Enter | choose |
+| F1–F5 | save the current position into an empty slot, or jump to a saved one |
+| Shift+F1–F5 | replace a saved position |
+| F6 (also Ctrl+B) | clear all bookmarks and restore the full layout |
 | Esc | cancel |
 
 ## Settings

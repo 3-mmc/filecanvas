@@ -355,13 +355,14 @@ def chat_id(profile, chat):
 
 class Chat(fc.Provider):
     """nchat's profiles → chats → messages. `KINDS` are the node kinds it answers for."""
-    KINDS = ('profile', 'pinned', 'chat-group', 'chat-part', 'chat', 'run', 'chat-message', 'earlier')
+    KINDS = ('profile', 'pinned', 'archived', 'chat-group', 'chat-part', 'chat', 'run', 'chat-message', 'earlier')
     pane = True
 
     def __init__(self, nchat='nchat', conf=None, log=None, read_receipts=True, typing=True, notify=True,
                  serve=None, remember=None):
         self.read_receipts, self.send_typing, self.notify = read_receipts, typing, notify
         self.remember_in = remember
+        self.local_chats = {}
         self.grouping, self.split = 'all', 'none'
         self.group_day = datetime.date.today()
         try:
@@ -369,6 +370,12 @@ class Chat(fc.Provider):
                 saved = json.load(f)
             if not isinstance(saved, dict):
                 saved = {}
+            local = saved.get('chats', {})
+            if isinstance(local, dict):
+                self.local_chats = {p: {c: {k: v for k, v in flags.items()
+                                           if k in ('pinned', 'archived') and isinstance(v, bool)}
+                                       for c, flags in chats.items() if isinstance(flags, dict)}
+                                    for p, chats in local.items() if isinstance(chats, dict)}
             if saved.get('grouping') in ('date', 'name', 'all'):
                 self.grouping = saved['grouping']
             if saved.get('split') in ('unread', 'none'):
@@ -382,6 +389,19 @@ class Chat(fc.Provider):
         self.shown = {}         # (profile, chat): how many of its messages the canvas shows
         self.serve = serve or Serve(lambda path: self.changed_at(path), nchat, conf, log)   # serve: tests' own
         self.serve.on_event = self.on_event
+
+    def chat_view(self, p, c):
+        """Local choices override server flags without ever changing them there."""
+        return dict(c, **self.local_chats.get(p.id, {}).get(c.get('id'), {}))
+
+    def keep(self, canvas):
+        if self.remember_in:
+            try:
+                os.makedirs(os.path.dirname(os.path.abspath(self.remember_in)), exist_ok=True)
+                with open(self.remember_in, 'w') as f:
+                    json.dump(dict(grouping=self.grouping, split=self.split, chats=self.local_chats), f)
+            except OSError as e:
+                canvas.status('chat-view', str(e), 'failed')
 
     def root(self):
         return fc.Node('', 'chat', True, source=self, kind='root')
@@ -430,7 +450,8 @@ class Chat(fc.Provider):
                 raise OSError(0, 'needs signing in again: nchat --setup')
             with s.lock:
                 ask, p.asked_chats = not p.asked_chats, True
-                chats = sorted(p.chats.values(), key=lambda c: (bool(c.get('archived')), not c.get('pinned'),
+                chats = sorted((self.chat_view(p, c) for c in p.chats.values()),
+                               key=lambda c: (bool(c.get('archived')), not c.get('pinned'),
                                                                 -c.get('last_message_time', -1)))
             if ask:
                 s.request('get_chats', profile=p.id)
@@ -438,7 +459,10 @@ class Chat(fc.Provider):
                 raise OSError(0, 'connecting…' if p.connected is None else 'no chats yet')
             pinned = [c for c in chats if is_pinned(c)]      # a branch of their own, first
             out = [fc.Node(pinned_id(node.path), 'Pinned', True, node, 'pinned', data=p)] if pinned else []
-            return out + self.chat_branches(node, p, [c for c in chats if not is_pinned(c)])
+            out += self.chat_branches(node, p, [c for c in chats if not is_pinned(c) and not c.get('archived')])
+            if any(c.get('archived') for c in chats):
+                out.append(fc.Node(f'{node.path}{SEP}archived', 'Archive', True, node, 'archived', data=p))
+            return out
         if node.kind in ('chat-group', 'chat-part'):
             p, ids = node.data
             with s.lock:
@@ -446,12 +470,13 @@ class Chat(fc.Provider):
                                key=lambda c: -c.get('last_message_time', -1))
             return self.chat_branches(node, p, chats, split=False) if node.kind == 'chat-part' else [
                 self.chat_node(node, p, c) for c in chats]
-        if node.kind == 'pinned':
+        if node.kind in ('pinned', 'archived'):
             with s.lock:
-                chats = sorted((c for c in p.chats.values() if is_pinned(c)),
+                chats = [self.chat_view(p, c) for c in p.chats.values()]
+                chats = sorted((c for c in chats if (is_pinned(c) if node.kind == 'pinned' else c.get('archived'))),
                                key=lambda c: -c.get('last_message_time', -1))
             if not chats:
-                raise OSError(0, 'nothing pinned')
+                raise OSError(0, 'nothing pinned' if node.kind == 'pinned' else 'nothing archived')
             return [self.chat_node(node, p, c) for c in chats]
         if node.kind == 'chat':
             return self.conversation(node)
@@ -484,7 +509,8 @@ class Chat(fc.Provider):
         return fc.Node(chat_id(p.id, c['id']), p.chat_name(c['id']), True, parent, 'chat', data=(p, c['id']))
 
     def pinned_chats(self, node):
-        return [c for c in node.data.chats.values() if is_pinned(c)]
+        chats = [self.chat_view(node.data, c) for c in node.data.chats.values()]
+        return [c for c in chats if c.get('archived')] if node.kind == 'archived' else [c for c in chats if is_pinned(c)]
 
     def conversation(self, node):
         """A chat's latest messages, oldest at the top, in runs: who, then what they said in a row.
@@ -504,7 +530,7 @@ class Chat(fc.Provider):
                 runs.append((sender, [m]))
         for sender, run in runs:
             when = stamp(run[0]['time'] / 1000).split(' · ')[1] if run[0].get('time', -1) > 0 else ''
-            name = p.who(sender) + (f'  {when}' if when != day else '')    # the day, when it changes
+            name = p.who(sender) + (f'\n{when}' if when and when != day else '')
             day = when
             name += ''.join('\n' + self.message_meta(m) for m in run)
             r = fc.Node(f'{node.path}{SEP}run{SEP}{run[0]["id"]}', name, True, node, 'run',
@@ -541,7 +567,7 @@ class Chat(fc.Provider):
     # -- how it looks
     def chat(self, node):
         p, chat = node.data[:2]
-        return p.chats.get(chat, {})
+        return self.chat_view(p, p.chats.get(chat, {'id': chat}))
 
     def label(self, node):
         if node.kind == 'profile' and isinstance(node.data, Profile):
@@ -551,7 +577,7 @@ class Chat(fc.Provider):
         return node.name
 
     def unread(self, node):
-        return node.kind == 'chat' and bool(self.chat(node).get('unread'))
+        return node.kind == 'chat' and bool(self.chat(node).get('unread')) and not self.chat(node).get('archived')
 
     def colour(self, node):
         if node.kind == 'pinned':
@@ -569,7 +595,7 @@ class Chat(fc.Provider):
         if node.kind in ('chat-group', 'chat-part'):
             p, ids = node.data
             chats = [p.chats[i] for i in ids if i in p.chats]
-        elif node.kind == 'pinned':
+        elif node.kind in ('pinned', 'archived'):
             chats = self.pinned_chats(node)
         else:
             return None
@@ -627,7 +653,7 @@ class Chat(fc.Provider):
         if node.kind != 'chat':
             return None
         c = self.chat(node)
-        return c.get('last_message_time', 0) / 1000 if c.get('unread') and c.get('last_message_time', -1) > 0 else None
+        return c.get('last_message_time', 0) / 1000 if c.get('unread') and not c.get('archived') and c.get('last_message_time', -1) > 0 else None
 
     def chip(self, node):
         """A run's name in its writer's colour (you: the bar's first chip's), and a chat that's
@@ -643,6 +669,9 @@ class Chat(fc.Provider):
         if p.who(sender) == 'You':
             return 'home_fg', 'home_bg'
         return 'person_fg', f'person{p.colour(chat, sender) % fc.PEOPLE}'
+
+    def chip_rows(self, node):
+        return 1 if node.kind == 'run' else None
 
     def start_at(self, node):
         return -1 if node.kind in ('chat', 'run') else 0       # the latest, and keep to it
@@ -743,7 +772,10 @@ class Chat(fc.Provider):
                     ('\x14', 'split', '⌃T unread apart' if self.split == 'none' else '⌃T not split')]
         if node.kind not in ('chat', 'run', 'chat-message', 'earlier'):
             return []
-        out = [('\x0e', 'write', '⌃N write'), ('\x01', 'attach', '⌃A send a file')]
+        c = self.chat(node)
+        out = [('\x10', 'pin', '⌃P unpin locally' if is_pinned(c) else '⌃P pin locally'),
+               ('\x19', 'archive', '⌃Y restore' if c.get('archived') else '⌃Y archive locally'),
+               ('\x0e', 'write', '⌃N write'), ('\x01', 'attach', '⌃A send a file')]
         if node.kind == 'chat-message':
             out.insert(1, ('\x12', 'reply', '⌃R reply'))
             if node.data[2].get('file'):
@@ -756,19 +788,24 @@ class Chat(fc.Provider):
                 self.grouping = {'all': 'date', 'date': 'name', 'name': 'all'}[self.grouping]
             else:
                 self.split = 'unread' if self.split == 'none' else 'none'
-            if self.remember_in:
-                try:
-                    os.makedirs(os.path.dirname(os.path.abspath(self.remember_in)), exist_ok=True)
-                    with open(self.remember_in, 'w') as f:
-                        json.dump(dict(grouping=self.grouping, split=self.split), f)
-                except OSError as e:
-                    canvas.status('group', str(e), 'failed')
+            self.keep(canvas)
             self.invalidate(deep=True)
             return None
         p, chat = node.data[:2]
         m = node.data[2] if node.kind == 'chat-message' else None
         to = p.chat_name(chat)
-        if name == 'write':
+        if name in ('pin', 'archive'):
+            c = self.chat(node)
+            flags = self.local_chats.setdefault(p.id, {}).setdefault(chat, {})
+            flag = 'pinned' if name == 'pin' else 'archived'
+            flags[flag] = not bool(c.get(flag))
+            if flag == 'pinned' and flags[flag]:
+                flags['archived'] = False
+            self.keep(canvas)
+            self.changed_at(profile_id(p.id))
+            canvas.status('chat-view', ('pinned locally' if flags[flag] else 'unpinned locally') if flag == 'pinned'
+                          else ('archived locally · find it in Archive' if flags[flag] else 'restored'), 'note')
+        elif name == 'write':
             canvas.ask(f'to {to}', lambda text: self.send(canvas, p, chat, text), changed=self.typing_in(p, chat))
         elif name == 'reply':
             canvas.ask(f'reply to {p.who(m.get("sender"))}',
@@ -880,6 +917,9 @@ class Chat(fc.Provider):
             self.status(key, f'sent to {to}' if e.get('ok', True) else f'not sent to {to}',
                         'ok' if e.get('ok', True) else 'failed')
         elif kind == 'arrived':
+            c = self.chat_view(p, p.chats.get(chat, {'id': chat}))
+            if c.get('archived'):
+                return
             if self.looking == (p.id, chat):    # you're in it: what came in flashes as it appears
                 for m in what:
                     self.pulse(f'{chat_id(p.id, chat)}{SEP}{m["id"]}')
@@ -888,7 +928,7 @@ class Chat(fc.Provider):
             line = f'{p.who(last.get("sender"))}: {(last.get("text") or "📎").splitlines()[0] if last.get("text") else "📎"}'
             self.pulse(chat_id(p.id, chat))
             self.pulse(profile_id(p.id))
-            if is_pinned(p.chats.get(chat, {})):
+            if is_pinned(c):
                 self.pulse(pinned_id(profile_id(p.id)))
             self.status(f'new-{p.id}-{chat}', f'{name} · {line}' if name != p.who(last.get('sender')) else line, 'note')
             muted = p.chats.get(chat, {}).get('muted')

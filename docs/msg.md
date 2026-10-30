@@ -95,6 +95,13 @@ ln -s "$PWD/bin/nchat" ~/.local/bin/nchat
 msgcanvas chat-setup     # each account: nchat's own setup, a QR code or a code; then quit nchat
 ```
 
+**Local pinning and hiding.** On a chat or one of its messages, **⌃P** pins/unpins it in twigs;
+**⌃Y** archives it locally, removing it from the main lists. Find it in the profile's **Archive**
+branch and press **⌃Y** again to restore it. Pinning an archived chat also restores it. These
+choices are saved alongside the chat view settings and override the displayed server flags;
+they never send pin/archive commands to the service. Archived chats stay quiet on new arrivals.
+The sender's coloured chip covers the name alone; dates, times and receipts below it stay plain.
+
 A profile nchat is open on is locked: msgcanvas shows it greyed until nchat is closed. Its
 `[chat]` settings in accounts.toml can name another `nchat`, its `confdir`, or turn chats off
 (`enabled = false`).

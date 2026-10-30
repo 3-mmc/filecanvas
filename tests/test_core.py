@@ -892,3 +892,82 @@ class Keys(unittest.TestCase):
         self.assertIn('Hello very  worl▏', ANSI.sub('', c.typing_line(80)))
         typed('ctrl-left', '\x0b', '\x15', *'ok', '\r')                # ⌃K after, ⌃U before: just what's typed
         self.assertEqual(got, ['ok'])
+
+
+class Bookmarks(unittest.TestCase):
+    def canvas(self, **settings):
+        return fc.Canvas('', options(provider=fc.Tree({f'Branch {i:02}': {f'Item {j:02}': f'body {i}/{j}'
+                                                                      for j in range(50)} for i in range(50)}),
+                                    glyphs='plain', **settings))
+
+    def test_fkeys_decode_without_leaking_into_filter(self):
+        self.assertEqual(list(fc.keys('\x1bOP\x1bOQ\x1bOR\x1bOS\x1b[15~\x1b[1;2P\x1b[15;2~')),
+                         ['f1', 'f2', 'f3', 'f4', 'f5', 'shift-f1', 'shift-f5'])
+        c = self.canvas()
+        press(c, *fc.keys('\x1bOP'))
+        self.assertIn(1, c.bookmarks)
+        self.assertEqual(c.root.filter, '')
+        self.assertEqual(list(fc.keys('\x1b[17~')), ['f6'])
+        self.assertEqual(list(fc.keys('\x1b[12;34R')), [])  # cursor-position report, not F3
+        press(c, '\x02')
+        self.assertFalse(c.bookmarks)
+
+    def test_save_jump_replace_clear_and_fold(self):
+        c = self.canvas(fold=True, limit=5)
+        c.go(['/Branch 00', '/Branch 00/Item 00'])
+        press(c, 'f1')
+        c.go(['/Branch 49', '/Branch 49/Item 49'])
+        press(c, 'f2', '\x18')
+        rendered = '\n'.join(screen(c, 120, 28))
+        self.assertIn('[F1] Item 00', rendered)
+        self.assertIn('[F2] Item 49', rendered)
+        camera = c.target
+        press(c, 'f1')
+        self.assertEqual(c.focus.path, '/Branch 00/Item 00')
+        rendered = '\n'.join(screen(c, 120, 28))
+        self.assertIn('[F2] Item 49', rendered)
+        self.assertEqual(c.target, camera)  # both references already fit: no sweeping camera
+        press(c, 'down', 'shift-f1', 'f2', 'f1')
+        self.assertEqual(c.focus.path, '/Branch 00/Item 01')
+        press(c, 'f6')
+        self.assertFalse(c.bookmarks)
+        self.assertNotIn('[F1]', '\n'.join(screen(c)))
+
+    def test_stale_bookmark_is_safe_and_replaced_node_is_found(self):
+        p = fc.Tree({'one': {'item': 'a'}, 'two': 'b'})
+        c = fc.Canvas('', options(provider=p))
+        c.go(['/one', '/one/item'])
+        press(c, 'f1')
+        p.data['one']['item'] = 'updated'
+        p.invalidate()
+        screen(c)
+        c.go(['/two'])
+        press(c, 'f1')
+        self.assertEqual(c.focus.data, 'updated')
+        del p.data['one']['item']
+        p.invalidate()
+        screen(c)
+        press(c, 'f1')
+        self.assertIn('unavailable', c.message)
+        for size in [(28, 8), (60, 12), (160, 40)]:
+            screen(c, *size)
+
+    def test_all_five_slots_survive_resize_and_focus_stays_visible(self):
+        c = self.canvas()
+        for i in range(5):
+            c.go([f'/Branch {i * 10:02}', f'/Branch {i * 10:02}/Item 00'])
+            press(c, f'f{i + 1}')
+        for width, height in [(160, 45), (44, 10), (100, 25)]:
+            lines = screen(c, width, height)
+            self.assertIn('[F5] Item 00', '\n'.join(lines[:-2]))
+            self.assertLessEqual(len(lines), height)
+            if height == 45:
+                for i in range(1, 6):
+                    self.assertIn(f'[F{i}] Item 00', '\n'.join(lines))
+
+    def test_bookmarks_do_not_intercept_composer_keys(self):
+        c = self.canvas()
+        c.ask('text', lambda text: None)
+        press(c, 'f1', '\x02')
+        self.assertFalse(c.bookmarks)
+        self.assertIsNotNone(c.asking)

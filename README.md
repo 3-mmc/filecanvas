@@ -40,6 +40,18 @@ so these cost nothing while nothing happens:
 
 `CDECK_CALM=1` keeps it all still (beacons lit, nothing blinking).
 
+## Positions to return to
+
+**F1–F5** saves the current position into an empty slot, or jumps to the position already there.
+**Shift+F1–F5** replaces a slot; **F6** clears all five (Ctrl+B also works outside tmux). Bookmarks last for this canvas session.
+On keyboards that use F-keys for system controls, use Fn too.
+
+Saved positions wear their slot number. Their branches stay open and lit, even with folding on.
+The canvas collapses intervening rows into “more” markers, keeping a little context around each
+reference; arrow navigation still reaches every item. The camera fits the active position and
+as many references as the window allows, staying put while they fit together. Clear the bookmarks
+to return to the full layout. This works across twigs, as well as within a single twig.
+
 ## Growing a twig
 
 A twig is a package with a provider (what's in the tree: `children()`, and whichever looks it
