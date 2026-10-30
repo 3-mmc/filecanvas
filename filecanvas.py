@@ -875,7 +875,7 @@ def layout(n, opts, focus, tall=lambda n: 1):
             else:
                 acc.append((t + y, b + y))
         ys.append(y)
-    shift = -((ys[0] + ys[-1] + tall(kids[-1]) - 1) // 2)    # centred on the parent's row
+    shift = -((ys[0] + ys[-1]) // 2)    # centred on the parent's row, by their first lines
     for k, y in zip(kids, ys):
         k._rel = y + shift
     return [(0, h - 1)] + [(t + shift, b + shift) for t, b in acc]
