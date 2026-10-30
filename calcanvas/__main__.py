@@ -16,7 +16,9 @@ WHERE = ('Google Calendar: Settings → (the calendar, on the left) → Integrat
 
 
 def calendar():
-    return cal.Calendar(plans=cal.WHATIF, feeds=feeds.load(), fetch=feeds.fetch)
+    from . import notify
+    return cal.Calendar(plans=cal.WHATIF, feeds=feeds.load(), fetch=feeds.fetch, notify=notify.notify,
+                        reminded=cal.REMINDED)
 
 
 def find(name):

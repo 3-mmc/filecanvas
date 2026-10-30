@@ -12,6 +12,7 @@ Last-Modified), so fetching often costs little. Feeds are read-only: nothing goe
     url = "https://calendar.google.com/calendar/ical/…/basic.ics"
     every = 15                      # minutes between fetches while the canvas is open (15)
     quiet = true                    # in the background: after your own things, fainter (holidays)
+    remind = 30                     # minutes before its timed events with no reminder of their own
 """
 import json, os, re, tomllib, urllib.error, urllib.parse, urllib.request
 
@@ -25,8 +26,8 @@ TIMEOUT = 30
 
 
 class Feed:
-    def __init__(self, name, url, key=None, every=EVERY, quiet=False):
-        self.name, self.url, self.every, self.quiet = name, url, every, quiet
+    def __init__(self, name, url, key=None, every=EVERY, quiet=False, remind=None):
+        self.name, self.url, self.every, self.quiet, self.remind = name, url, every, quiet, remind
         self.key = key or slug(name)
 
     def where(self):
@@ -59,7 +60,8 @@ def load(path=FEEDS):
     for i, f in enumerate(got):
         if not f.get('url') or not f.get('name'):
             raise SystemExit(f'calcanvas: {path}: feed {i + 1} needs a name and a url')
-        feed = Feed(f['name'], f['url'], f.get('key'), int(f.get('every', EVERY)), bool(f.get('quiet', False)))
+        feed = Feed(f['name'], f['url'], f.get('key'), int(f.get('every', EVERY)), bool(f.get('quiet', False)),
+                    int(f['remind']) if 'remind' in f else None)
         while feed.key in keys:
             feed.key += '-2'
         keys.add(feed.key)
@@ -77,7 +79,8 @@ def save(feeds, path=FEEDS):
         out.append(f'[[feed]]\nname = {q(f.name)}\nurl = {q(f.url)}\n'
                    + (f'key = {q(f.key)}\n' if f.key != slug(f.name) else '')
                    + (f'every = {f.every}\n' if f.every != EVERY else '')
-                   + ('quiet = true\n' if f.quiet else ''))
+                   + ('quiet = true\n' if f.quiet else '')
+                   + (f'remind = {f.remind}\n' if f.remind is not None else ''))
     tmp = path + '.new'
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, 'w') as fh:

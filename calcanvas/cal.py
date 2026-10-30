@@ -20,6 +20,8 @@ DATA = os.path.join(os.environ.get('XDG_DATA_HOME') or os.path.expanduser('~/.lo
 STATE = os.path.join(os.environ.get('XDG_STATE_HOME') or os.path.expanduser('~/.local/state'), 'calcanvas')
 CALENDARS = os.path.join(DATA, 'calendars')
 WHATIF = os.path.join(STATE, 'whatif.json')
+REMINDED = os.path.join(STATE, 'reminded.json')
+REMIND_AHEAD = 14       # days ahead whose events' reminders are looked at
 NOTE_WIDTH = 60
 NOTE_MAX = 700          # characters of a description shown; a long invitation's start
 ROOT = '@cal'
@@ -83,10 +85,27 @@ def day_of(t):
 class Event:
     """One occurrence: `uid` is unique among them (a repeat's has its day), `start` and `end` dates
     (all day, end not included) or datetimes here."""
-    def __init__(self, uid, title, start, end=None, where='', note='', calendar=''):
+    def __init__(self, uid, title, start, end=None, where='', note='', calendar='', rules=(), zone=None):
         self.uid, self.title, self.where, self.note, self.calendar = uid, title, where, note, calendar
         self.start = start
         self.end = end if end is not None and end >= start else (start + DAY if all_day(start) else start)
+        self.rules, self.zone = rules, zone     # its reminders (reminders()), and the zone here
+
+    @property
+    def alarms(self):
+        """When its reminders go off, here."""
+        out = []
+        for kind, v, related in self.rules:
+            if kind == 'at':
+                out.append(v)
+                continue
+            base = self.end if related == 'END' else self.start
+            out.append((dt.datetime.combine(base, dt.time(), self.zone) if all_day(base) else base) + v)
+        return out
+
+    def over(self):
+        """When it's over: its end, or for a day's (all day), the midnight after."""
+        return dt.datetime.combine(self.end, dt.time(), self.zone) if all_day(self.end) else self.end
 
     @property
     def first(self):
@@ -113,20 +132,44 @@ class Event:
 
 
 def components(text):
-    """The VEVENTs in an .ics text, each {NAME: [(params, value)]}."""
-    out, cur = [], None
+    """The VEVENTs in an .ics text, each {NAME: [(params, value)]}, its VALARMs (reminders) in
+    ALARMS, each one the same."""
+    out, cur, alarm = [], None, None
     for line in re.sub(r'\r?\n[ \t]', '', text).splitlines():
         head, _, value = line.partition(':')
         name, *params = head.split(';')
-        name = name.upper()
-        if name == 'BEGIN' and value.upper() == 'VEVENT':
+        name, what = name.upper(), value.upper()
+        if name == 'BEGIN' and what == 'VEVENT':
             cur = {}
-        elif name == 'END' and value.upper() == 'VEVENT':
+        elif name == 'END' and what == 'VEVENT':
             if cur is not None:
                 out.append(cur)
             cur = None
+        elif cur is not None and name == 'BEGIN' and what == 'VALARM':
+            alarm = {}
+        elif cur is not None and name == 'END' and what == 'VALARM':
+            cur.setdefault('ALARMS', []).append(alarm or {})
+            alarm = None
+        elif alarm is not None:
+            alarm.setdefault(name, []).append((dict(p.split('=', 1) for p in params if '=' in p), value))
         elif cur is not None:
             cur.setdefault(name, []).append((dict(p.split('=', 1) for p in params if '=' in p), value))
+    return out
+
+
+def reminders(c, zone):
+    """A VEVENT's reminders as rules: ('at', when) or ('before', how long after its start (or its
+    end, 'END'), negative before it). Emailed ones aren't ours to give."""
+    out = []
+    for a in c.get('ALARMS', ()):
+        if 'TRIGGER' not in a or (a.get('ACTION') or [({}, '')])[0][1].upper() == 'EMAIL':
+            continue
+        p, v = a['TRIGGER'][0]
+        if p.get('VALUE', '').upper() == 'DATE-TIME' or re.match(r'\d{8}T', v):
+            if v[:4] >= '1990':     # Apple's "no reminder" is one set in 1976
+                out.append(('at', here(when(v, p, zone), zone), None))
+        else:
+            out.append(('before', duration(v), p.get('RELATED', 'START').upper()))
     return out
 
 
@@ -204,6 +247,7 @@ def parse(text, calendar, zone, horizon):
             moved.setdefault(c['UID'][0][1], set()).add(day_of(when(v, p, zone)))
     for c in comps:
         get = lambda name: unescape(c[name][0][1]) if name in c else ''
+        made = len(out)
         if 'DTSTART' not in c or get('STATUS').upper() == 'CANCELLED':
             continue
         p, v = c['DTSTART'][0]
@@ -237,6 +281,9 @@ def parse(text, calendar, zone, horizon):
                 p, v = c['RECURRENCE-ID'][0]
                 rid = f'@{day_of(when(v, p, zone))}'
             out.append(Event(uid + rid, title, here(start, zone), end and here(end, zone), where, note, calendar))
+        rules = reminders(c, zone)
+        for e in out[made:]:
+            e.rules, e.zone = rules, zone
     return out
 
 
@@ -310,6 +357,47 @@ class Plans:
         return next((p for p in self.get(day)['plans'] if p['id'] == pid), None)
 
 
+class Reminded:
+    """Which reminders have been told of ('told') and looked at ('seen'), by event and when it
+    went off, in a JSON file: none is told twice, even across starts."""
+    def __init__(self, path):
+        self.path = path
+        try:
+            with open(path) as f:
+                self.got = json.load(f)
+        except (TypeError, OSError, ValueError):
+            self.got = {}
+
+    def get(self, uid, at):
+        return self.got.get(f'{uid}|{at.isoformat()}')
+
+    def put(self, uid, at, what):
+        self.got[f'{uid}|{at.isoformat()}'] = what
+
+    def save(self):
+        if not self.path:
+            return
+        cut = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=60)).isoformat()
+        self.got = {k: v for k, v in self.got.items() if k.rsplit('|', 1)[1] >= cut[:10]}    # two months' worth
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        with open(self.path + '.new', 'w') as f:
+            json.dump(self.got, f, indent=1)
+        os.replace(self.path + '.new', self.path)
+
+
+def reminder_text(e, now):
+    """What a reminder's notification says: when, and where."""
+    if all_day(e.start):
+        left = (e.first - now.date()).days
+        when = 'today' if left <= 0 else 'tomorrow' if left == 1 else dated(e.first)
+    else:
+        left = e.start - now
+        when = (f'now, until {e.end:%H:%M}' if left <= dt.timedelta() else
+                f'in {max(1, int(left.total_seconds() // 60))} min, at {e.start:%H:%M}' if left < dt.timedelta(hours=1) else
+                f'at {e.start:%H:%M}' if e.first == now.date() else f'{dated(e.first)} at {e.start:%H:%M}')
+    return when + (f' · {e.where}' if e.where else '')
+
+
 def clashes(events):
     """The timed events among `events` that overlap another."""
     timed = [e for e in events if not all_day(e.start)]
@@ -324,12 +412,18 @@ class Calendar(fc.Provider):
     KINDS = ('calendar', 'month', 'day', 'span', 'event', 'fork', 'alt', 'step', 'detail')
 
     def __init__(self, folder=CALENDARS, plans=None, today=None, watch=2.0, zone=None, now=None, feeds=(),
-                 fetch=None, quiet=None):
+                 fetch=None, quiet=None, notify=None, reminded=None, remind=None):
         self.folder, self.zone = folder, zone or local_zone()
         # calendars in the background (holidays, the moon): after your own, fainter, never leading a day
         self.quiet = set(quiet if quiet is not None else (f.name for f in feeds if getattr(f, 'quiet', False)))
         self.fixed_now = now or (dt.datetime.combine(today, dt.time(12), self.zone) if today else None)
         self.plans = Plans(plans)
+        self.notify = notify                    # notify(title, text): a desktop notification
+        # minutes before a calendar's timed events with no reminder of their own (Google's default
+        # reminder isn't in its feeds), by calendar
+        self.remind_by = remind if remind is not None else \
+            {f.name: f.remind for f in feeds if getattr(f, 'remind', None)}
+        self.reminded = Reminded(reminded)
         self.lock = threading.Lock()
         self.shown_days, self.shown_spans = {}, {}   # where each day and era is on the canvas, by path
         self.load()
@@ -427,11 +521,13 @@ class Calendar(fc.Provider):
                 at.append(e.start - SOON)
             elif now < e.end:
                 at.append(e.end)
+        at += [a for e in self.ahead() for a in e.alarms if a > now]     # a reminder going off
         return min(at).timestamp()
 
     def watch(self, every):
         seen = self.signature()
         while True:
+            self.remind()
             time.sleep(every)
             now = self.signature()
             if now != seen:         # synced, or a new day: today has moved
@@ -452,6 +548,8 @@ class Calendar(fc.Provider):
                     continue
         by_day, spans = {}, []
         for e in events:
+            if not e.rules and e.calendar in self.remind_by and not all_day(e.start):
+                e.rules, e.zone = [('before', -dt.timedelta(minutes=self.remind_by[e.calendar]), 'START')], self.zone
             if e.span:
                 spans.append(e)
             else:
@@ -461,6 +559,71 @@ class Calendar(fc.Provider):
                                    e.start if not all_day(e.start) else dt.datetime.min.replace(tzinfo=self.zone), e.title))
         with self.lock:
             self.names, self.by_day, self.spans = names, by_day, sorted(spans, key=lambda e: (e.first, e.title))
+
+    # -- reminders
+    def ahead(self):
+        """Your events from yesterday to REMIND_AHEAD days on, eras too: those a reminder can be
+        going off for."""
+        today = self.today()
+        days = [e for d in range(-1, REMIND_AHEAD + 1) for e in self.by_day.get(today + d * DAY, ())]
+        spans = [e for e in self.spans if e.first <= today + REMIND_AHEAD * DAY and e.last >= today - DAY]
+        return [e for e in days + spans if e.calendar not in self.quiet and e.rules]
+
+    def going_off(self, e):
+        """When `e`'s latest reminder went off, if one has and `e` isn't over and hasn't been
+        looked at since; else None."""
+        now = self.now()
+        gone = [a for a in e.alarms if a <= now]
+        if not gone or now >= e.over():
+            return None
+        last = max(gone)
+        return None if self.reminded.get(e.uid, last) == 'seen' else last
+
+    def remind(self):
+        """Tell of each reminder that's gone off and hasn't been told (a desktop notification, its
+        day flashing), once: even across starts. From watch()'s thread."""
+        told = []
+        with self.lock:
+            for e in self.ahead():
+                last = self.going_off(e)
+                if last is not None and self.reminded.get(e.uid, last) is None:
+                    self.reminded.put(e.uid, last, 'told')
+                    told.append(e)
+        if not told:
+            return
+        self.reminded.save()
+        for e in told:
+            if self.notify:
+                self.notify(e.title, reminder_text(e, self.now()))
+            for path in self.shown_days.get(e.first, ()):
+                self.pulse(path)
+        self.invalidate()
+
+    def beacon(self, node):
+        """Something with a reminder gone off, not looked at yet: white on red, blinking from when it
+        went off; and the day it's on, so it shows in the month."""
+        d = node.data or {}
+        if node.kind in ('event', 'span'):
+            evs = [d['event']]
+        elif node.kind == 'alt':
+            evs = [d['what']] if d['kind'] == 'event' else []
+        elif node.kind == 'day':
+            evs = [w for k, w in d['items'] if k == 'event'] + \
+                [a[2] for k, w in d['items'] if k == 'fork' for a in w if a[1] == 'event']
+        else:
+            return None
+        got = [t for t in map(self.going_off, evs) if t is not None]
+        return max(got).timestamp() if got else None
+
+    def focus(self, node):
+        """Looking at something whose reminder went off: it's seen, and stops."""
+        d = node.data or {}
+        e = d.get('event') if node.kind in ('event', 'span') else d['what'] if node.kind == 'alt' and \
+            d['kind'] == 'event' else d['items'][0][1] if node.kind == 'day' and len(d['items']) == 1 and \
+            d['items'][0][0] == 'event' else None
+        if e is not None and (last := self.going_off(e)) is not None:
+            self.reminded.put(e.uid, last, 'seen')
+            self.reminded.save()
 
     # -- what's on a day
     def fork(self, day):

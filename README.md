@@ -25,6 +25,13 @@ What runs over days (a trip, a visit) is a bar in its own colour among the days 
 an era: it opens onto what happens within it, eras inside it too, and while you're in one it says
 how far (`day 7 of 8`). A night out, even a 24-hour one, stays the night it starts.
 
+**Reminders**: when one goes off (the calendar's own, from its feed), you're told once (a desktop
+notification: Windows' under WSL; never twice, even across starts) and the thing, and its day in
+the month, become a beacon: white on red, blinking from when it went off, slower as it ages, until
+you've looked at it or it's over. Google leaves its default reminder out of its feeds: `remind = 30`
+on a feed (minutes) gives its timed events without one of their own one. Only while calcanvas (or
+msgcanvas) is open.
+
 ## What-ifs
 
 Where two things on a day overlap, the day forks (⑂) into them, and the bar counts what's still

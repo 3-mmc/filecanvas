@@ -213,6 +213,46 @@ class Canvas(unittest.TestCase):
         p.fixed_now = dt.datetime(2026, 11, 21, 11, 51, tzinfo=NY)
         self.assertEqual(p.close(), frozenset({'fly'}))                    # in: its label is made again
 
+    def test_a_reminder_tells_once_beacons_its_day_and_stops_when_seen(self):
+        with open(os.path.join(self.home, 'calendars', 'mine', 'remind.ics'), 'w') as f:
+            f.write(ics(['UID:dent', 'DTSTART;TZID=America/New_York:20261102T150000', 'DURATION:PT1H',
+                         'SUMMARY:Dentist', 'LOCATION:Main St', 'BEGIN:VALARM', 'ACTION:DISPLAY', 'TRIGGER:-PT30M',
+                         'UID:alarm-uid-not-the-events', 'END:VALARM', 'BEGIN:VALARM', 'ACTION:EMAIL',
+                         'TRIGGER:-P1D', 'END:VALARM'],
+                        ['UID:bins', 'DTSTART;VALUE=DATE:20261103', 'SUMMARY:Bins out',
+                         'BEGIN:VALARM', 'ACTION:AUDIO', 'TRIGGER:-PT15H', 'END:VALARM']))
+        told, kept = [], os.path.join(self.home, 'reminded.json')
+
+        def at(when):
+            return cal.Calendar(os.path.join(self.home, 'calendars'), self.plans, watch=0, now=when,
+                                notify=lambda title, text: told.append((title, text)), reminded=kept)
+        p = at(dt.datetime(2026, 11, 2, 14, 0, tzinfo=NY))
+        dent = p.by_day[dt.date(2026, 11, 2)][0]
+        self.assertEqual((dent.uid, dent.alarms), ('dent', [dt.datetime(2026, 11, 2, 14, 30, tzinfo=NY)]))   # e-mail ones aren't ours
+        self.assertEqual(dt.datetime.fromtimestamp(p.next_change(), NY), dt.datetime(2026, 11, 2, 14, 30, tzinfo=NY))
+        p.remind()
+        self.assertEqual(told, [('Bins out', 'tomorrow')])                 # 15h before the day: 9:00 today
+        p = at(dt.datetime(2026, 11, 2, 14, 31, tzinfo=NY))
+        p.remind()
+        self.assertEqual(told[1:], [('Dentist', 'in 29 min, at 15:00 · Main St')])
+        p.remind()
+        at(dt.datetime(2026, 11, 2, 14, 32, tzinfo=NY)).remind()           # not again, even started again
+        self.assertEqual(len(told), 2)
+        month = next(k for k in p.children(p.root()) if k.data['month'] == dt.date(2026, 11, 1))
+        day = next(k for k in p.children(month) if k.data.get('day') == dt.date(2026, 11, 2))
+        self.assertEqual(p.beacon(day), dt.datetime(2026, 11, 2, 14, 30, tzinfo=NY).timestamp())
+        p.focus(day)                                                         # looked at: it stops
+        self.assertIsNone(p.beacon(day))
+        self.assertIsNone(at(dt.datetime(2026, 11, 2, 14, 40, tzinfo=NY)).beacon(day))
+        self.assertIsNone(at(dt.datetime(2026, 11, 4, 0, 1, tzinfo=NY)).going_off(p.by_day[dt.date(2026, 11, 3)][0]))   # over
+        es = cal.parse(ics(['UID:a', 'DTSTART:20261105T150000Z', 'SUMMARY:apple', 'BEGIN:VALARM',
+                            'TRIGGER:19760401T005545Z', 'END:VALARM']), 'x', NY, dt.date(2030, 1, 1))
+        self.assertEqual(es[0].alarms, [])                                  # Apple's "no reminder"
+        q = cal.Calendar(os.path.join(self.home, 'calendars'), self.plans, watch=0, now=dt.datetime(2026, 10, 15, 9, tzinfo=NY),
+                         remind={'Mine': 30})
+        drng = q.by_day[dt.date(2026, 10, 15)][0]
+        self.assertEqual(drng.alarms, [dt.datetime(2026, 10, 15, 10, 30, tzinfo=NY)])   # the calendar's default
+
     def test_a_span_is_an_era_holding_what_happens_in_it(self):
         self.press('up')                # onto Tomasz in London
         era = self.c.focus
