@@ -223,6 +223,54 @@ class Provider(unittest.TestCase):
             subprocess.run(['notmuch', 'new', '--quiet'], check=True)
 
 
+class Thunderbird(unittest.TestCase):
+    def test_imap_accounts_and_how_they_sign_in(self):
+        from msgcanvas import thunderbird
+        path = os.path.join(TMP, 'prefs.js')
+        with open(path, 'w') as f:
+            f.write(textwrap.dedent('''
+                user_pref("mail.accountmanager.accounts", "account1,account2,account3,account4,account5");
+                user_pref("mail.account.account1.identities", "id1");
+                user_pref("mail.account.account1.server", "server1");
+                user_pref("mail.identity.id1.useremail", "me@gmail.com");
+                user_pref("mail.server.server1.authMethod", 10);
+                user_pref("mail.server.server1.hostname", "imap.gmail.com");
+                user_pref("mail.server.server1.type", "imap");
+                user_pref("mail.server.server1.userName", "me@gmail.com");
+                user_pref("mail.account.account2.server", "server2");
+                user_pref("mail.server.server2.type", "none");
+                user_pref("mail.account.account3.identities", "id3");
+                user_pref("mail.account.account3.server", "server3");
+                user_pref("mail.identity.id3.useremail", "a.b@uni.ac.uk");
+                user_pref("mail.server.server3.hostname", "outlook.office365.com");
+                user_pref("mail.server.server3.type", "imap");
+                user_pref("mail.account.account4.identities", "id4");
+                user_pref("mail.account.account4.server", "server4");
+                user_pref("mail.identity.id4.useremail", "x@small.example");
+                user_pref("mail.identity.id4.smtpServer", "smtp4");
+                user_pref("mail.server.server4.hostname", "mail.small.example");
+                user_pref("mail.server.server4.port", 143);
+                user_pref("mail.server.server4.type", "imap");
+                user_pref("mail.server.server4.userName", "xuser");
+                user_pref("mail.smtpserver.smtp4.hostname", "smtp.small.example");
+                user_pref("mail.smtpserver.smtp4.port", 465);
+                user_pref("mail.account.account5.identities", "id5");
+                user_pref("mail.account.account5.server", "server5");
+                user_pref("mail.identity.id5.useremail", "me@small.example");
+                user_pref("mail.server.server5.hostname", "mail.small.example");
+                user_pref("mail.server.server5.type", "imap");
+                '''))
+        got = thunderbird.accounts(path)
+        self.assertEqual([(e['name'], e['type'], e.get('auth')) for e in got],
+                         [('me', 'gmail', 'google'), ('uni', 'outlook', None),
+                          ('small', 'imap', None), ('small-2', 'imap', None)])
+        self.assertEqual((got[2]['user'], got[2]['imap_port'], got[2]['smtp_host'], got[2]['smtp_port']),
+                         ('xuser', 143, 'smtp.small.example', 465))
+        made = [accounts.Account(e, {}) for e in got]           # each one is a valid account
+        self.assertEqual(made[0].secret().split()[-1], made[0].token)
+        self.assertIn('name = "uni"', thunderbird.toml(got, 'here'))
+        self.assertNotIn('_thunderbird', thunderbird.toml(got, 'here'))
+
 class Helpers(unittest.TestCase):
     def test_short_dates(self):
         now = time.mktime((2026, 10, 30, 12, 0, 0, 0, 0, -1))

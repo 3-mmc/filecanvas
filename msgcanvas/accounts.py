@@ -21,8 +21,8 @@ MARK = '# Made by msgcanvas from accounts.toml: edit that and run `msgcanvas set
 # Thunderbird's public client id: most university Microsoft 365 tenants already allow it.
 MICROSOFT_CLIENT = '9e5f94bc-e8a4-4e73-b8be-63364c29d753'
 
-# What each kind of account needs, before the account's own lines. `auth`: password (pass) or
-# microsoft (OAuth). `patterns`: which folders mbsync fetches.
+# What each kind of account needs, before the account's own lines. `auth`: password (pass), or
+# OAuth with microsoft or google. `patterns`: which folders mbsync fetches.
 PRESETS = {
     'gmail': dict(imap_host='imap.gmail.com', smtp_host='smtp.gmail.com', smtp_port=587,
                   # All Mail and Important repeat every other folder; notmuch would only dedupe them
@@ -30,17 +30,20 @@ PRESETS = {
     'outlook': dict(imap_host='outlook.office365.com', smtp_host='smtp.office365.com', smtp_port=587,
                     auth='microsoft'),
     'seznam': dict(imap_host='imap.seznam.cz', smtp_host='smtp.seznam.cz', smtp_port=465),
+    'yahoo': dict(imap_host='imap.mail.yahoo.com', smtp_host='smtp.mail.yahoo.com', smtp_port=465),
     'imap': {},
 }
+OAUTH = ('microsoft', 'google')
 BASE = dict(auth='password', imap_port=993, smtp_port=587, patterns='*', max_messages=2000)
 
 TEMPLATE = '''# msgcanvas's mail accounts. After editing: `msgcanvas setup` makes the configs from this,
 # `msgcanvas login NAME` stores a password or signs in, `msgcanvas sync` fetches mail.
 #
-# type: gmail (an app password: myaccount.google.com/apppasswords), outlook (Microsoft 365,
-# signs in with OAuth), seznam, or imap (then give imap_host and smtp_host).
-# Anything a type sets can be set per account: imap_host, imap_port, smtp_host, smtp_port,
-# user (the login, if it isn't the address), patterns (mbsync's folder patterns).
+# type: gmail (an app password: myaccount.google.com/apppasswords, or auth = "google"),
+# outlook (Microsoft 365, signs in with OAuth), seznam, yahoo (an app password), or imap (then
+# give imap_host and smtp_host). Anything a type sets can be set per account: auth (password,
+# microsoft, google), imap_host, imap_port, smtp_host, smtp_port, user (the login, if it isn't
+# the address), patterns (mbsync's folder patterns). `msgcanvas import-thunderbird` adds yours.
 
 [defaults]
 real_name = "{real_name}"
@@ -94,6 +97,8 @@ class Account:
         self.imap_host, self.imap_port = v['imap_host'], int(v['imap_port'])
         self.smtp_host, self.smtp_port = v['smtp_host'], int(v['smtp_port'])
         self.auth, self.patterns = v['auth'], v['patterns']
+        if self.auth not in ('password',) + OAUTH:
+            raise ValueError(f"{self.name}: auth {self.auth!r} isn't password, {' or '.join(OAUTH)}")
         self.max_messages = int(v['max_messages'])
         self.maildir = os.path.join(os.path.expanduser(defaults.get('maildir', '~/Mail')), self.name)
 
@@ -103,7 +108,7 @@ class Account:
 
     def secret(self, smtp=False):
         """The shell command that prints this account's password or a fresh OAuth token."""
-        if self.auth == 'microsoft':
+        if self.auth in OAUTH:
             return shlex.join(['python3', OAUTH2, self.token])
         return shlex.join(['pass', 'show', 'mail/' + self.name])
 
@@ -136,7 +141,7 @@ def mbsyncrc(accounts):
                 f'PassCmd {quoted(a.secret())}',
                 'TLSType IMAPS',
                 f'CertificateFile {CERTS}']
-        if a.auth == 'microsoft':
+        if a.auth in OAUTH:
             out.append('AuthMechs XOAUTH2')
         out += ['',
                 f'IMAPStore {a.name}-far', f'Account {a.name}', '',
@@ -170,7 +175,7 @@ def msmtprc(accounts, log):
                 f'from {a.address}',
                 f'user {a.user}',
                 f'passwordeval {a.secret(smtp=True)}']
-        if a.auth == 'microsoft':
+        if a.auth in OAUTH:
             out.append('auth xoauth2')
         out.append('')
     if accounts:
