@@ -207,10 +207,21 @@ class Behaviour(unittest.TestCase):
         changed('x')
         self.assertEqual(len([a for a in self.asked if a[0] == 'send_typing']), 2)
 
-    def test_your_messages_show_whether_they_were_read(self):
-        self.assertEqual(self.c.body(self.p, {'text': 'hi', 'outgoing': True}), 'hi ✓')
-        self.assertEqual(self.c.body(self.p, {'text': 'hi', 'outgoing': True, 'read': True}), 'hi ✓✓')
-        self.assertEqual(self.c.body(self.p, {'text': 'hi'}), 'hi')
+    def test_each_message_says_who_when_and_whether_it_was_read(self):
+        at = time.mktime((2026, 10, 30, 14, 32, 0, 0, 0, -1))
+        mine = {'id': 'x', 'sender': 'me', 'text': 'hi', 'outgoing': True, 'time': at * 1000}
+        head = self.c.head(self.p, 'ann', mine)
+        self.assertEqual((head.segs[0][0], head.after), ('You', ' 14:32 · ' + chat.stamp(at)[8:] + '  ✓'))
+        mine['read'] = True
+        self.assertTrue(self.c.head(self.p, 'ann', mine).after.endswith('  ✓✓'))
+        theirs = dict(mine, sender='ann', outgoing=False)
+        self.assertNotIn('✓', self.c.head(self.p, 'ann', theirs).after)
+        self.assertEqual(self.c.body(self.p, mine), 'hi')                  # the ticks are on the head line
+        now = time.mktime((2026, 10, 30, 18, 0, 0, 0, 0, -1))
+        self.assertEqual(chat.stamp(at, now), '14:32 · today')
+        self.assertEqual(chat.stamp(at - 86400, now), '14:32 · yesterday')
+        self.assertEqual(chat.stamp(at - 5 * 86400, now), '14:32 · 25 Oct')
+        self.assertEqual(chat.stamp(time.mktime((2024, 3, 2, 9, 5, 0, 0, 0, -1)), now), '09:05 · 2 Mar 2024')
 
 
 @unittest.skipUnless(NCHAT, 'nchat not installed')

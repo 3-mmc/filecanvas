@@ -9,7 +9,7 @@ id, and the canvas is invalidated where it changed. Nothing is marked read yet."
 import json, os, subprocess, threading, time
 
 from . import files, filecanvas as fc
-from .mail import SEP, when
+from .mail import SEP
 
 PROTOCOLS = {'WhatsAppMd': 'WhatsApp', 'Signal': 'Signal', 'Instagram': 'Instagram',
              'Telegram': 'Telegram', 'Dummy': 'Dummy'}
@@ -261,6 +261,23 @@ class Serve:
         return []
 
 
+def ticks(m):
+    """✓ there, ✓✓ read: for a message of yours."""
+    return '✓✓' if m.get('read') else '✓'
+
+
+def stamp(seconds, now=None):
+    """When a message came, time first: 14:32 · today, · yesterday, · 5 Oct, · 5 Oct 2024."""
+    t, now = time.localtime(seconds), time.localtime(now or time.time())
+    clock = time.strftime('%H:%M', t)
+    if t[:3] == now[:3]:
+        return f'{clock} · today'
+    if t[:3] == time.localtime(time.mktime(now) - 86400)[:3]:
+        return f'{clock} · yesterday'
+    day = f'{t.tm_mday} {time.strftime("%b", t)}'
+    return f'{clock} · {day}' if t.tm_year == now.tm_year else f'{clock} · {day} {t.tm_year}'
+
+
 def profile_id(profile):
     return '/@' + profile
 
@@ -429,13 +446,9 @@ class Chat(fc.Provider):
             msgs = self.history(p, chat)
             if not msgs:
                 return '(fetching…)' if chat in p.asked else '(no messages)'
-            out, last = [], None
-            for m in msgs:
-                who = p.who(m.get('sender'))
-                day = when(m['time'] / 1000) if m.get('time', -1) > 0 else ''
-                if (who, day) != last:          # a name, as a chip of the bar's, when it changes
-                    out += ([''] if out else []) + [self.name_chip(who, f' {day}', p.colour(chat, m.get('sender')))]
-                    last = (who, day)
+            out = []
+            for m in msgs:                      # each: who (a chip of the bar's), when, ✓ / ✓✓; what
+                out += ([''] if out else []) + [self.head(p, chat, m)]
                 out.append('\n'.join('  ' + l for l in self.body(p, m).split('\n')))
             typing = [p.who(u) for u in p.typing.get(chat, ())]
             if typing:
@@ -443,10 +456,15 @@ class Chat(fc.Provider):
             return out
         if node.kind == 'chat-message':
             p, chat, m = node.data
-            t = time.strftime('%Y-%m-%d %H:%M', time.localtime(m['time'] / 1000)) if m.get('time', -1) > 0 else ''
-            return [self.name_chip(p.who(m.get('sender')), f' {t}', p.colour(chat, m.get('sender'))),
-                    '', self.body(p, m)] + self.picture(p, chat, m)
+            return [self.head(p, chat, m), '', self.body(p, m)] + self.picture(p, chat, m)
         return None
+
+    def head(self, p, chat, m):
+        """A message's first line: who wrote it, then its time and day, then (yours) ✓ or ✓✓."""
+        after = f' {stamp(m["time"] / 1000)}' if m.get('time', -1) > 0 else ''
+        if m.get('outgoing') and not m.get('deleted'):
+            after += '  ' + ticks(m)
+        return self.name_chip(p.who(m.get('sender')), after, p.colour(chat, m.get('sender')))
 
     def name_chip(self, who, after, n):
         """Who wrote, as a chip like the bar's: you in its first chip's colours, everyone else in
@@ -479,12 +497,6 @@ class Chat(fc.Provider):
             out.append('(deleted)')
         elif m.get('text'):
             out.append(m['text'] + (' (edited)' if m.get('edited') else ''))
-        if m.get('outgoing') and not m.get('deleted'):      # ✓ there, ✓✓ read
-            tick = ' ✓✓' if m.get('read') else ' ✓'
-            if out:
-                out[-1] += tick
-            else:
-                out.append(tick.strip())
         f = m.get('file')
         if f:
             state = {0: 'not downloaded', 1: f.get('path', ''), 2: 'downloading', 3: 'download failed'}
