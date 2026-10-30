@@ -43,6 +43,7 @@ OLD_CONFIG = CONFIG.replace(os.sep + 'treecanvas' + os.sep, os.sep + 'filecanvas
 #   repo_clean_* repo_dirty_*                the bar's git chip
 #   git_dirty git_staged git_untracked git_conflict   the marks beside changed entries
 #   person0 … person9, person_fg       chips for people (a chat's senders), and their text
+#   state_done state_doing             what's finished and what's under way (a task tree's)
 # `ls_colors` is the theme's default for --ls-colors; you can still change it.
 THEMES = {
     'powerline': {  # powerline-shell's default theme
@@ -52,6 +53,7 @@ THEMES = {
         'repo_clean_bg': 148, 'repo_clean_fg': 0, 'repo_dirty_bg': 161, 'repo_dirty_fg': 15,
         'git_dirty': 161, 'git_staged': 148, 'git_untracked': 130, 'git_conflict': 9,
         'rest': 248, 'ghost': 237, 'ls_colors': True,
+        'state_done': 114, 'state_doing': 179,
         'person_fg': 15, 'person0': 24, 'person1': 23, 'person2': 58, 'person3': 96, 'person4': 130, 'person5': 61,
         'person6': 28, 'person7': 161, 'person8': 91, 'person9': 17,
     },
@@ -62,6 +64,7 @@ THEMES = {
         'repo_clean_bg': 136, 'repo_clean_fg': 232, 'repo_dirty_bg': 166, 'repo_dirty_fg': 232,
         'git_dirty': 166, 'git_staged': 142, 'git_untracked': 137, 'git_conflict': 196,
         'rest': 246, 'ghost': 237, 'ls_colors': True,
+        'state_done': 107, 'state_doing': 214,
         'person_fg': 230, 'person0': 94, 'person1': 130, 'person2': 58, 'person3': 95, 'person4': 23, 'person5': 88,
         'person6': 22, 'person7': 54, 'person8': 60, 'person9': 125,
     },
@@ -75,6 +78,7 @@ THEMES = {
         'repo_dirty_fg': '#eceff4', 'git_dirty': '#d08770', 'git_staged': '#a3be8c',
         'git_untracked': '#b48ead', 'git_conflict': '#bf616a',
         'rest': '#a7adba', 'ghost': '#434c5e', 'ls_colors': True,
+        'state_done': '#a3be8c', 'state_doing': '#ebcb8b',
         'person_fg': '#eceff4', 'person0': '#4c6a94', 'person1': '#3e6573', 'person2': '#56653a', 'person3': '#6a4a6a', 'person4': '#8c5040', 'person5': '#4e5c88',
         'person6': '#337744', 'person7': '#773355', 'person8': '#553377', 'person9': '#776633',
     },
@@ -88,6 +92,7 @@ THEMES = {
         'repo_dirty_fg': '#ebdbb2', 'git_dirty': '#fe8019', 'git_staged': '#b8bb26',
         'git_untracked': '#d3869b', 'git_conflict': '#fb4934',
         'rest': '#a89984', 'ghost': '#504945', 'ls_colors': True,
+        'state_done': '#b8bb26', 'state_doing': '#fabd2f',
         'person_fg': '#282828', 'person0': '#83a598', 'person1': '#8ec07c', 'person2': '#b8bb26', 'person3': '#d3869b', 'person4': '#fe8019', 'person5': '#fabd2f',
         'person6': '#a89984', 'person7': '#c9a0dc', 'person8': '#7fb4ca', 'person9': '#e9b4a0',
     },
@@ -101,6 +106,7 @@ THEMES = {
         'repo_dirty_fg': '#fdf6e3', 'git_dirty': '#cb4b16', 'git_staged': '#859900',
         'git_untracked': '#6c71c4', 'git_conflict': '#dc322f',
         'rest': '#839496', 'ghost': '#073642', 'ls_colors': True,
+        'state_done': '#859900', 'state_doing': '#b58900',
         'person_fg': '#002b36', 'person0': '#3693d6', 'person1': '#2aa198', 'person2': '#859900', 'person3': '#8487cc', 'person4': '#df619a', 'person5': '#d77148',
         'person6': '#b58900', 'person7': '#93a1a1', 'person8': '#e5726f', 'person9': '#a0d070',
     },
@@ -575,8 +581,8 @@ class Provider:
         fg, bg, bold) in theme roles. When there's no room, segments after the first give way."""
         names = []
         while node.parent:
-            names.append(self.label(node)); node = node.parent
-        segs = [(self.label(node) or '⌂', 'home_fg', 'home_bg', False)]
+            names.append(self.label(node).split('\n')[0]); node = node.parent
+        segs = [(self.label(node).split('\n')[0] or '⌂', 'home_fg', 'home_bg', False)]
         names.reverse()
         for i, name in enumerate(names):
             last = i == len(names) - 1
@@ -584,7 +590,8 @@ class Provider:
         return segs, []
 
     def choose(self, node):
-        """Enter: what the canvas ends with (pick() returns it), or None to stay on it."""
+        """Enter: what the canvas ends with (pick() returns it), or None to stay on it (a branch
+        opens), or STAY to stay without opening it (Enter did something to it)."""
         return node.path
 
     def actions(self, node):
@@ -610,6 +617,15 @@ class Provider:
 
     def chip(self, node):
         """(fg, bg) to draw `node` as a chip, as the bar draws its path; None for plain text."""
+        return None
+
+    def mark_before(self, node):
+        """Whether `node`'s mark goes before its label (a task's ✓), not after (a file's git ●).
+        A column with any mark before keeps room for one, so its labels line up."""
+        return False
+
+    def line(self, node):
+        """A colour for the branch line that leads into `node` (its state, say); None: the canvas's."""
         return None
 
     def start_at(self, node):
@@ -670,6 +686,7 @@ class Provider:
 
 
 STALE = threading.Lock()
+STAY = object()     # choose(): stay on the canvas, and don't open the branch either
 
 
 class FileSystem(Provider):
@@ -1161,9 +1178,12 @@ class Canvas:
             stub = isinstance(n, Stub)
             marks[id(n)] = (None, 1.0) if stub else (self.source.mark(n), self.source.dim(n))
             chips[id(n)] = None if stub else self.source.chip(n)
+        before = {id(n) for n in nodes if marks[id(n)][0] and self.source.mark_before(n)}
+        leads = {n.depth: 2 for n in nodes if id(n) in before}    # room for a mark before, the column over
         widths = {}
         for n in nodes:
-            wd = max(cells(l) for l in lines_of(n)) + (2 if marks[id(n)][0] else 0) + (2 if chips[id(n)] else 0)
+            wd = max(cells(l) for l in lines_of(n)) + (2 if marks[id(n)][0] and id(n) not in before else 0) + \
+                (2 if chips[id(n)] else 0) + leads.get(n.depth, 0)
             widths[n.depth] = max(widths.get(n.depth, 0), wd)
         extra = o.gap + (1 if cap_r else 0)
         xs = [0]
@@ -1245,7 +1265,7 @@ class Canvas:
             return max(s * marks[id(n)][1], 0.3)
 
         for n in nodes:
-            x = xs[n.depth]
+            x = xs[n.depth] + leads.get(n.depth, 0)
             lines = lines_of(n)
             text, widest = lines[0], max(cells(l) for l in lines)
             mark, chip = marks[id(n)][0], chips[id(n)]
@@ -1277,7 +1297,10 @@ class Canvas:
                 for i, l in enumerate(lines):
                     put(x, n.row + i, l, style)
                 cur = x + cells(text)
-            if mark:
+            if mark and id(n) in before:
+                role, glyph, ascii_ = mark
+                put(x - 2, n.row, ascii_ if plain else glyph, P.fg(role, s))
+            elif mark:
                 role, glyph, ascii_ = mark
                 put(cur + 1, n.row, ascii_ if plain else glyph, P.fg(role, s))
                 cur += 2
@@ -1291,6 +1314,9 @@ class Canvas:
                 put(end, n.row, '─' * max(0, spine - end), lit if hot else line)
                 top, bot = kids[0].row, kids[-1].row
                 rows = {k.row for k in kids}
+                strength_of_line = STRENGTH[min(dist(n) * 2, len(STRENGTH) - 1)]
+                own = {k.row: P.fg(c, strength_of_line) for k in kids     # a child's own colour, into it
+                       if not isinstance(k, Stub) and (c := self.source.line(k)) is not None}
                 chosen = next((k for k in kids if id(k) in path), None) if hot else None
                 for y in range(min(top, n.row), max(bot, n.row) + 1):
                     if y == n.row:
@@ -1301,9 +1327,9 @@ class Canvas:
                         ch = '│'
                     # the lit part of the spine runs from the parent's row to the chosen child's
                     on = chosen is not None and min(n.row, chosen.row) <= y <= max(n.row, chosen.row)
-                    put(spine, y, ch, lit if on else line)
+                    put(spine, y, ch, lit if on else own.get(y, line))
                 for k in kids:
-                    put(spine + 1, k.row, '─', lit if chosen is k else line)
+                    put(spine + 1, k.row, '─', lit if chosen is k else own.get(k.row, line))
 
         self.backdrop_under(grid, 1 if o.header else 0)
         lines = [o.header(full)] if o.header else []
@@ -1601,6 +1627,8 @@ def apply(c, k, opts):
         return None if done is None else ('done', done)
     if k in ('\r', '\n'):
         chosen = c.source.choose(c.focus)
+        if chosen is STAY:
+            return None
         if chosen is not None:
             return 'done', chosen
         c.enter()       # staying on the canvas: a branch opens

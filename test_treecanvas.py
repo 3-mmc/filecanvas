@@ -519,6 +519,70 @@ class Going(unittest.TestCase):
         self.assertFalse(c.go(['/a', '/nowhere']))
         self.assertEqual(c.focus.path, '/a/b/d')
 
+
+class Tasks(Live):
+    """A task tree: states before the titles, lines in their colour, Enter marks without opening."""
+    done = {'/plan/a'}
+
+    def mark(self, node):
+        if node.name == 'note':
+            return None
+        return ('state_done', '✓', 'x') if node.path in self.done else ('stub', '○', '.')
+
+    def mark_before(self, node):
+        return True
+
+    def line(self, node):
+        return 'state_done' if node.path in self.done else None
+
+    def label(self, node):
+        return node.name + ('\n███ ░░░' if node.is_dir else '')
+
+    def choose(self, node):
+        self.done.add(node.path)
+        return fc.STAY
+
+    def pane_for(self, node):
+        return False
+
+
+class TaskTrees(unittest.TestCase):
+    def canvas(self):
+        return fc.Canvas('plan', options(provider=Tasks({'plan': {'a': 1, 'b': {'c': 1}, 'note': 1}}), glyphs='plain'))
+
+    def test_marks_go_before_and_titles_line_up(self):
+        c = self.canvas()
+        text = [ANSI.sub('', l).rstrip() for l in c.frame(100, 16, animate=False)[0]]
+        rows = {name: next(l for l in text if l.endswith(' ' + name)) for name in ('a', 'b', 'note')}
+        cols = {name: len(r) - len(name) for name, r in rows.items()}
+        self.assertEqual(cols['b'], cols['note'])                  # b and the unmarked note start together
+        self.assertEqual(cols['a'], cols['b'] + 1)                 # (the choice's block pads it by one)
+        self.assertEqual(rows['a'][cols['a'] - 3], 'x')            # each mark just before its name
+        self.assertEqual(rows['b'][cols['b'] - 2], '.')
+        self.assertIn('███ ░░░', '\n'.join(text))                  # a branch's second line
+        self.assertNotIn('?', text[-2])                            # the bar has its first line only
+
+    def test_the_line_into_a_finished_one_is_its_colour_and_enter_stays(self):
+        c = self.canvas()
+        press(c, 'down')                                           # on b: the line into a is a's own
+        lines, _ = c.frame(100, 16, animate=False)
+        green = c.paint.fg('state_done', fc.STRENGTH[0])
+        a_row = next(l for l in lines if ANSI.sub('', l).rstrip().endswith('a'))
+        self.assertIn(green + '╭─', a_row)                          # the bracket into it, green
+        press(c, '\r')                                             # b is a branch: marked, not opened
+        self.assertIn('/plan/b', c.source.done)
+        self.assertEqual(c.focus.name, 'b')
+
+    def test_state_colours_in_every_theme_read_well(self):
+        def lum(c):
+            r = [x / 255 for x in fc.rgb(c)]
+            r = [x / 12.92 if x <= 0.03928 else ((x + 0.055) / 1.055) ** 2.4 for x in r]
+            return 0.2126 * r[0] + 0.7152 * r[1] + 0.0722 * r[2]
+        for name, t in fc.THEMES.items():
+            for role in ('state_done', 'state_doing'):
+                a, b = sorted((lum(t[role]), lum(t['bg'])), reverse=True)
+                self.assertGreaterEqual((a + 0.05) / (b + 0.05), 4.5, f'{name} {role}')
+
 class Wrap(unittest.TestCase):
     def test_breaks_at_spaces_and_cuts_long_words(self):
         self.assertEqual(fc.wrap('the quick brown fox', 10), ['the quick', 'brown fox'])
