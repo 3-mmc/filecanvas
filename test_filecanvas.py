@@ -194,6 +194,72 @@ class StayingOpen(unittest.TestCase):
         self.assertIs(c.focus, c.root)
 
 
+
+class Acting(fc.Tree):
+    """A provider with actions: ⌃R asks for a reply, ⌃D asks y/n, ⌃O steps outside, ⌃E ends."""
+    def __init__(self, data):
+        super().__init__(data)
+        self.sent, self.ran = [], []
+
+    def actions(self, node):
+        return [('\x12', 'reply', '⌃R reply'), ('\x04', 'delete', '⌃D delete'),
+                ('\x0f', 'open', '⌃O open'), ('\x05', 'end', '⌃E end')] if not node.is_dir else []
+
+    def act(self, node, name, canvas):
+        if name == 'reply':
+            canvas.ask('reply to ' + node.name, lambda text: self.sent.append((node.name, text)) or
+                       canvas.say('sent'))
+        elif name == 'delete':
+            canvas.ask('delete? [y/n]', lambda k: canvas.say('deleted' if k == 'y' else 'kept'), choices='yn')
+        elif name == 'open':
+            canvas.outside(lambda: self.ran.append(node.name))
+            canvas.outside(lambda: 1 / 0)
+        elif name == 'end':
+            return 'ended on ' + node.name
+
+
+class Actions(unittest.TestCase):
+    def canvas(self):
+        return fc.Canvas('', options(provider=Acting({'a': 'one', 'b': 'two'})))
+
+    def test_hints_name_them_and_their_keys_do_them(self):
+        c = self.canvas()
+        self.assertIn('⌃R reply', screen(c)[-1])
+        press(c, '\x12')
+        self.assertTrue(screen(c)[-2].startswith(' reply to a '))
+        press(c, *'hello worx', '\x7f', 'l', 'd')
+        self.assertIn('hello world▏', screen(c)[-2])
+        self.assertIn('⏎ done', screen(c)[-1])
+        press(c, 'down')                                   # arrows don't move while typing
+        self.assertEqual(c.focus.name, 'a')
+        press(c, '\x17', *'there', '\r')                   # ⌃W: a word back
+        self.assertEqual(c.source.sent, [('a', 'hello there')])
+        self.assertIn('sent', screen(c)[-2])
+        press(c, 'down')
+        self.assertNotIn('sent', screen(c)[-2])            # until the next key
+
+    def test_esc_closes_the_line_and_choices_take_one_key(self):
+        c = self.canvas()
+        press(c, '\x12', 'x', 'esc')
+        self.assertEqual((c.asking, c.source.sent), (None, []))
+        press(c, '\x04', 'q')                              # not a choice: still asking
+        self.assertIsNotNone(c.asking)
+        press(c, 'Y')
+        self.assertIn('deleted', screen(c)[-2])
+
+    def test_outside_runs_after_and_a_failure_is_said(self):
+        c = self.canvas()
+        press(c, '\x0f')
+        self.assertEqual(c.source.ran, [])                 # waits for the terminal
+        c.drain()
+        self.assertEqual(c.source.ran, ['a'])
+        self.assertIn('failed: division by zero', screen(c)[-2])
+
+    def test_an_action_can_end_the_canvas(self):
+        self.assertEqual(press(self.canvas(), 'down', '\x05'), ('done', 'ended on b'))
+        c = fc.Canvas('', options(provider=Acting({'dir': {'x': 1}})))
+        self.assertNotIn('⌃R', screen(c)[-1])              # nothing to do on a branch
+
 class Wrap(unittest.TestCase):
     def test_breaks_at_spaces_and_cuts_long_words(self):
         self.assertEqual(fc.wrap('the quick brown fox', 10), ['the quick', 'brown fox'])
