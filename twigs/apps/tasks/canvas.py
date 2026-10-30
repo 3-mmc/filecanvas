@@ -71,6 +71,9 @@ class Desk(tc.Provider):
 
     def __init__(self, store, path=None, watch=2.0):
         self.store, self.file = store, path
+        if 'canvas_position' not in {r['name'] for r in store.rows('PRAGMA table_info(bullets)')}:
+            store.db.execute('ALTER TABLE bullets ADD COLUMN canvas_position INTEGER')
+            store.db.commit()
         self.today = date.today
         self.memo = {}          # snapshots, until something changes: a frame asks each node many times
         self.clock = time.time
@@ -131,7 +134,7 @@ class Desk(tc.Provider):
             return [tc.Node('/' + key, name, True, node, key) for key, name in SECTIONS]
         if k in ('today', 'page'):
             day = self.today().isoformat() if k == 'today' else node.data
-            return [self.bullet(b, node) for b in s.rows("SELECT * FROM bullets WHERE day=? ORDER BY id", (day,))]
+            return [self.bullet(b, node) for b in s.rows("SELECT * FROM bullets WHERE day=? ORDER BY canvas_position IS NULL, canvas_position, id", (day,))]
         if k == 'pages':
             days = s.rows("SELECT DISTINCT day FROM bullets WHERE day<? ORDER BY day DESC LIMIT 60",
                           (self.today().isoformat(),))
@@ -515,6 +518,8 @@ class Desk(tc.Provider):
             out.append(('\x0e', 'new', '⌃N add'))
         if k in ('task', 'activity', 'habit'):
             out.append(('\x01', 'inside', '⌃A add inside'))
+        if k == 'bullet':
+            out += [('alt-up', 'up', '⌥↑↓ move'), ('alt-down', 'down', '')]
         if k == 'task':
             out += [('alt-right', 'nest', '⌥→ nest'), ('alt-left', 'lift', '⌥← lift'),
                     ('alt-up', 'up', '⌥↑↓ move'), ('alt-down', 'down', '')]
@@ -612,6 +617,25 @@ class Desk(tc.Provider):
             self.new(node, canvas, typed)
         elif name == 'inside':
             self.inside(node, canvas, typed)
+        elif name in ('up', 'down') and k == 'bullet':
+            rows = s.rows('SELECT id FROM bullets WHERE day=? ORDER BY canvas_position IS NULL, canvas_position, id',
+                          (d['day'],))
+            ids = [r['id'] for r in rows]
+            at = ids.index(d['id'])
+            to = at + (-1 if name == 'up' else 1)
+            if not 0 <= to < len(ids):
+                canvas.status('act', 'first already' if name == 'up' else 'last already', 'note')
+                return None
+            ids[at], ids[to] = ids[to], ids[at]
+            with s.change():
+                s.db.executemany('UPDATE bullets SET canvas_position=? WHERE id=?', enumerate(ids))
+            self.changed_here(node)
+            canvas.refresh()
+            ids, at = [], node
+            while at.parent is not None:
+                ids.append(at.path)
+                at = at.parent
+            canvas.go(list(reversed(ids)))
         elif name in ('nest', 'lift', 'up', 'down'):
             moved = {'nest': lambda: s.indent_task(d['id']), 'lift': lambda: s.outdent_task(d['id']),
                      'up': lambda: s.move_task(d['id'], -1), 'down': lambda: s.move_task(d['id'], 1)}[name]()

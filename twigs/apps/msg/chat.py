@@ -9,6 +9,7 @@ id, and the canvas is invalidated where it changed. Nothing is marked read yet."
 import datetime, json, os, subprocess, threading, time, zlib
 
 from twigs import core as fc
+from twigs.kit.dates import when_group
 
 from . import files
 from .mail import SEP
@@ -354,12 +355,26 @@ def chat_id(profile, chat):
 
 class Chat(fc.Provider):
     """nchat's profiles → chats → messages. `KINDS` are the node kinds it answers for."""
-    KINDS = ('profile', 'pinned', 'chat', 'run', 'chat-message', 'earlier')
+    KINDS = ('profile', 'pinned', 'chat-group', 'chat-part', 'chat', 'run', 'chat-message', 'earlier')
     pane = True
 
     def __init__(self, nchat='nchat', conf=None, log=None, read_receipts=True, typing=True, notify=True,
-                 serve=None):
+                 serve=None, remember=None):
         self.read_receipts, self.send_typing, self.notify = read_receipts, typing, notify
+        self.remember_in = remember
+        self.grouping, self.split = 'all', 'none'
+        self.group_day = datetime.date.today()
+        try:
+            with open(remember) as f:
+                saved = json.load(f)
+            if not isinstance(saved, dict):
+                saved = {}
+            if saved.get('grouping') in ('date', 'name', 'all'):
+                self.grouping = saved['grouping']
+            if saved.get('split') in ('unread', 'none'):
+                self.split = saved['split']
+        except (TypeError, OSError, ValueError):
+            pass
         self.sending = {}       # request id: (status key, profile, chat, who to, timer)
         self.looking = None     # (profile, chat) you're in, or None
         self.typed = {}         # (profile, chat): when your typing was last told
@@ -374,12 +389,7 @@ class Chat(fc.Provider):
     def changed_at(self, path):
         """What's in the node `path` changed: a profile's chats are its pinned ones too; a chat's
         runs with it (a new message joins the last one: fetched again too, deep)."""
-        if path and path.startswith('/@') and path.count(SEP) == 1:
-            self.invalidate(path, deep=True)
-            return
-        self.invalidate(path)
-        if path and path.startswith('/@') and SEP not in path:
-            self.invalidate(pinned_id(path))
+        self.invalidate(path, deep=True)
 
     def loading(self):
         """(what's loading, whether it's done), for the opening screen: each profile connecting,
@@ -428,7 +438,14 @@ class Chat(fc.Provider):
                 raise OSError(0, 'connecting…' if p.connected is None else 'no chats yet')
             pinned = [c for c in chats if is_pinned(c)]      # a branch of their own, first
             out = [fc.Node(pinned_id(node.path), 'Pinned', True, node, 'pinned', data=p)] if pinned else []
-            return out + [self.chat_node(node, p, c) for c in chats if not is_pinned(c)]
+            return out + self.chat_branches(node, p, [c for c in chats if not is_pinned(c)])
+        if node.kind in ('chat-group', 'chat-part'):
+            p, ids = node.data
+            with s.lock:
+                chats = sorted((p.chats[i] for i in ids if i in p.chats),
+                               key=lambda c: -c.get('last_message_time', -1))
+            return self.chat_branches(node, p, chats, split=False) if node.kind == 'chat-part' else [
+                self.chat_node(node, p, c) for c in chats]
         if node.kind == 'pinned':
             with s.lock:
                 chats = sorted((c for c in p.chats.values() if is_pinned(c)),
@@ -444,6 +461,24 @@ class Chat(fc.Provider):
             return [fc.Node(f'{node.parent.path}{SEP}{m["id"]}', self.message_label(p, m), False, node,
                             'chat-message', data=(p, chat, m)) for m in msgs]
         return []
+
+    def chat_branches(self, node, p, chats, split=True):
+        if split and self.split == 'unread':
+            return [fc.Node(f'{node.path}{SEP}part:{key}', title, True, node, 'chat-part',
+                            data=(p, [c['id'] for c in chats if bool(c.get('unread')) == unread]))
+                    for key, title, unread in [('unread', 'Unread', True), ('read', 'Read', False)]
+                    if any(bool(c.get('unread')) == unread for c in chats)]
+        if self.grouping == 'all':
+            return [self.chat_node(node, p, c) for c in chats]
+        groups = {}
+        for c in sorted(chats, key=lambda c: -c.get('last_message_time', -1)):
+            t = c.get('last_message_time', -1)
+            title = (when_group(t / 1000) if t > 0 else 'No messages') if self.grouping == 'date' else \
+                (p.chat_name(c['id'])[:1].upper() or '#')
+            groups.setdefault(title, []).append(c['id'])
+        titles = sorted(groups) if self.grouping == 'name' else groups
+        return [fc.Node(f'{node.path}{SEP}group:{title}', title, True, node, 'chat-group',
+                        data=(p, groups[title])) for title in titles]
 
     def chat_node(self, parent, p, c):
         return fc.Node(chat_id(p.id, c['id']), p.chat_name(c['id']), True, parent, 'chat', data=(p, c['id']))
@@ -471,6 +506,7 @@ class Chat(fc.Provider):
             when = stamp(run[0]['time'] / 1000).split(' · ')[1] if run[0].get('time', -1) > 0 else ''
             name = p.who(sender) + (f'  {when}' if when != day else '')    # the day, when it changes
             day = when
+            name += ''.join('\n' + self.message_meta(m) for m in run)
             r = fc.Node(f'{node.path}{SEP}run{SEP}{run[0]["id"]}', name, True, node, 'run',
                         data=(p, chat, run, sender))
             r.open = True                       # a conversation shows what everyone said, not just one
@@ -480,12 +516,14 @@ class Chat(fc.Provider):
         return out
 
     def message_label(self, p, m):
-        """A message as it's drawn on the canvas: what it says (quote, text, file, reactions),
-        then its time and, if it's yours, ✓ or ✓✓."""
+        """The contents only; time and receipts live under the sender."""
+        return self.body(p, m)
+
+    def message_meta(self, m):
         end = time.strftime('%H:%M', time.localtime(m['time'] / 1000)) if m.get('time', -1) > 0 else ''
         if m.get('outgoing') and not m.get('deleted'):
             end += ' ' + ticks(m)
-        return self.body(p, m) + ('  ' + end if end else '')
+        return end.strip()
 
     def history(self, p, chat):
         """The chat's messages, oldest first; the first look asks nchat for the latest."""
@@ -528,9 +566,13 @@ class Chat(fc.Provider):
             t = c.get('last_message_time', -1)
             return (ago(t / 1000, time.time()), 'git_dirty' if c.get('unread') else 'stub', bool(c.get('unread'))) \
                 if t > 0 else None
-        if node.kind != 'pinned':
+        if node.kind in ('chat-group', 'chat-part'):
+            p, ids = node.data
+            chats = [p.chats[i] for i in ids if i in p.chats]
+        elif node.kind == 'pinned':
+            chats = self.pinned_chats(node)
+        else:
             return None
-        chats = self.pinned_chats(node)
         unread = sum(1 for c in chats if c.get('unread'))
         return (f'{unread}/{len(chats)}', 'git_dirty', True) if unread else (str(len(chats)), 'stub', False)
 
@@ -564,6 +606,13 @@ class Chat(fc.Provider):
     def next_change(self):
         """When the next 'how long ago' turns over (a chat's, or the last seen of who you're with)."""
         now, got = time.time(), []
+        if self.grouping == 'date':
+            today = datetime.date.fromtimestamp(now)
+            if today != self.group_day:
+                self.group_day = today
+                self.invalidate(deep=True)
+            tomorrow = today + datetime.timedelta(days=1)
+            got.append(time.mktime((*tomorrow.timetuple()[:3], 0, 0, 0, 0, 0, -1)))
         for p in self.serve.profiles.values():
             with self.serve.lock:
                 times = [c.get('last_message_time', -1) for c in p.chats.values()]
@@ -602,13 +651,13 @@ class Chat(fc.Provider):
         """Chats are on the canvas itself: the pane only shows a photo."""
         if node.kind == 'chat-message':
             return ((node.data[2].get('file') or {}).get('type') or '').startswith('image/')
-        return node.kind not in self.KINDS
+        return node.kind == 'profile' and not isinstance(node.data, Profile)
 
     def bar(self, node, plain):
         names, n = [], node
         while n.parent:
             names.append(fc.clip((n.data[2].get('text') or '📎').split('\n')[0], 30)
-                         if n.kind == 'chat-message' else self.label(n).split('  ')[0])
+                         if n.kind == 'chat-message' else self.label(n).splitlines()[0].split('  ')[0])
             n = n.parent
         names.reverse()
         segs = [('chat', 'home_fg', 'home_bg', False)] + [
@@ -688,6 +737,10 @@ class Chat(fc.Provider):
 
     # -- writing, and files
     def actions(self, node):
+        if node.kind in ('profile', 'chat-group', 'chat-part') and not isinstance(node.data, dict):
+            nxt = {'all': 'date', 'date': 'name', 'name': 'all'}[self.grouping]
+            return [('\x0c', 'group', f'⌃L by {nxt}'),
+                    ('\x14', 'split', '⌃T unread apart' if self.split == 'none' else '⌃T not split')]
         if node.kind not in ('chat', 'run', 'chat-message', 'earlier'):
             return []
         out = [('\x0e', 'write', '⌃N write'), ('\x01', 'attach', '⌃A send a file')]
@@ -698,6 +751,20 @@ class Chat(fc.Provider):
         return out
 
     def act(self, node, name, canvas):
+        if name in ('group', 'split'):
+            if name == 'group':
+                self.grouping = {'all': 'date', 'date': 'name', 'name': 'all'}[self.grouping]
+            else:
+                self.split = 'unread' if self.split == 'none' else 'none'
+            if self.remember_in:
+                try:
+                    os.makedirs(os.path.dirname(os.path.abspath(self.remember_in)), exist_ok=True)
+                    with open(self.remember_in, 'w') as f:
+                        json.dump(dict(grouping=self.grouping, split=self.split), f)
+                except OSError as e:
+                    canvas.status('group', str(e), 'failed')
+            self.invalidate(deep=True)
+            return None
         p, chat = node.data[:2]
         m = node.data[2] if node.kind == 'chat-message' else None
         to = p.chat_name(chat)

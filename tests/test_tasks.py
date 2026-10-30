@@ -321,3 +321,38 @@ def test_when_reads_days_and_lengths():
          date(2026, 11, 13), date(2026, 11, 2)]
     assert when.day("1 jan", fri) == date(2027, 1, 1) and when.day("soon", fri) is None and when.day("31 feb", fri) is None
     assert [when.minutes(t) for t in ("25", "25m", "1h", "1h30", "90 min", "", "x")] == [25, 25, 60, 90, 90, None, None]
+
+
+def test_today_entries_move_persist_and_undo(desk):
+    c = canvas(desk)
+    selected = find(c, 'Today', 'Email supervisor')
+    before = [n.data['id'] for n in selected.parent.load() if n.kind == 'bullet']
+    press(c, 'alt-up')
+    screen(c)
+    after = [n.data['id'] for n in c.focus.parent.load() if n.kind == 'bullet']
+    assert after == [before[1], before[0], *before[2:]]
+    assert c.focus.path == selected.path
+    reopened = canvas(desk)
+    assert [n.data['id'] for n in find(reopened, 'Today').load() if n.kind == 'bullet'] == after
+    press(c, '\x1a')
+    screen(c)
+    assert [n.data['id'] for n in c.focus.parent.load() if n.kind == 'bullet'] == before
+    find(c, 'Today', 'Email supervisor')
+    press(c, 'alt-down')
+    screen(c)
+    assert [n.data['id'] for n in c.focus.parent.load() if n.kind == 'bullet'] == [before[0], before[2], before[1]]
+    press(c, 'alt-down')
+    screen(c)
+    assert c.focus.data['id'] == before[1]
+
+
+def test_today_move_from_combined_twigs_keeps_focus(desk):
+    from twigs.kit.together import Together
+    provider = Desk(desk, watch=0)
+    both = Together([('TuiDo', provider)])
+    c = tc.Canvas('', tc.options(provider=both, backdrop='off', ease=1))
+    selected = find(c, 'TuiDo', 'Today', 'Email supervisor')
+    press(c, 'alt-up')
+    screen(c)
+    assert c.focus.path == selected.path
+    assert next(n for n in c.focus.parent.load() if n.kind == 'bullet').path == selected.path

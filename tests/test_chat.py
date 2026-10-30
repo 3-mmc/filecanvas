@@ -145,9 +145,54 @@ class Events(unittest.TestCase):
         self.assertEqual(c.count(pinned), ('1/2', 'git_dirty', True))           # one of two unread
         self.assertEqual(c.mark(pinned)[1], '●')
         stale = []
-        c.invalidate = stale.append
+        c.invalidate = lambda path=None, deep=False: stale.append((path, deep))
         c.changed_at(profile.path)                                              # the chats changed:
-        self.assertEqual(stale, [profile.path, chat.pinned_id(profile.path)])  # the pinned ones too
+        self.assertEqual(stale, [(profile.path, True)])  # the pinned ones too
+
+    def test_chat_grouping_splitting_remembering_and_live_updates(self):
+        s = chat.Serve.detached()
+        s.apply({'event': 'hello', 'profiles': [{'profile': 'W_1', 'protocol': 'WhatsAppMd'}]})
+        now = time.time() * 1000
+        s.apply({'event': 'chats', 'profile': 'W_1', 'chats': [
+            {'id': 'ann', 'name': 'Ann', 'last_message_time': now, 'unread': True},
+            {'id': 'bo', 'name': 'Bo', 'last_message_time': now - 10 * 86400000}]})
+        remember = os.path.join(TMP, 'chat-view.json')
+        c = chat.Chat(serve=s, remember=remember)
+        canvas = fc.Canvas('', options(c))
+        profile = canvas.root.load()[0]
+        canvas.go([profile.path])
+        press(canvas, '\x0c')
+        screen(canvas)
+        self.assertEqual(c.grouping, 'date')
+        profile = canvas.root.load()[0]
+        groups = profile.load()
+        self.assertEqual(groups[0].name, 'Today')
+        self.assertEqual(groups[0].load()[0].path, chat.chat_id('W_1', 'ann'))
+        canvas.go([profile.path])
+        press(canvas, '\x14')
+        screen(canvas)
+        profile = canvas.root.load()[0]
+        self.assertEqual([n.name for n in profile.load()], ['Unread', 'Read'])
+        self.assertEqual(profile.load()[0].load()[0].name, 'Today')
+        other = chat.Chat(serve=s, remember=remember)
+        self.assertEqual((other.grouping, other.split), ('date', 'unread'))
+        s.profiles['W_1'].chats['bo']['last_message_time'] = now + 1
+        c.changed_at(profile.path)
+        screen(canvas)
+        read = canvas.root.load()[0].load()[1]
+        self.assertEqual(read.load()[0].name, 'Today')
+        canvas.go([profile.path])
+        press(canvas, '\x0c')
+        screen(canvas)
+        self.assertEqual(canvas.root.load()[0].load()[0].load()[0].name, 'A')
+
+    def test_messages_section_has_no_empty_reading_pane(self):
+        c = chat.Chat(serve=chat.Serve.detached())
+        both = together.Together([('Messages', c)])
+        canvas = fc.Canvas('', options(both))
+        section = canvas.root.load()[0]
+        self.assertFalse(both.pane_for(section))
+        self.assertIsNone(both.preview(section))
 
     def test_an_unread_chat_is_a_beacon_from_its_latest_message(self):
         s = chat.Serve.detached()
@@ -336,10 +381,17 @@ class Behaviour(unittest.TestCase):
     def test_each_message_says_what_then_when_and_whether_it_was_read(self):
         at = time.mktime((2026, 10, 30, 14, 32, 0, 0, 0, -1))
         mine = {'id': 'x', 'sender': 'me', 'text': 'hi', 'outgoing': True, 'time': at * 1000}
-        self.assertEqual(self.c.message_label(self.p, mine), 'hi  14:32 ✓')
+        self.assertEqual(self.c.message_label(self.p, mine), 'hi')
+        self.assertEqual(self.c.message_meta(mine), '14:32 ✓')
         mine['read'] = True
-        self.assertEqual(self.c.message_label(self.p, mine), 'hi  14:32 ✓✓')
-        self.assertEqual(self.c.message_label(self.p, dict(mine, sender='ann', outgoing=False)), 'hi  14:32')
+        self.assertEqual(self.c.message_meta(mine), '14:32 ✓✓')
+        self.assertEqual(self.c.message_meta(dict(mine, sender='ann', outgoing=False)), '14:32')
+        self.p.messages['ann'] = {'x': mine}
+        conversation = fc.Node(chat.chat_id(self.p.id, 'ann'), 'Ann', True, source=self.c,
+                               kind='chat', data=(self.p, 'ann'))
+        run = self.c.conversation(conversation)[-1]
+        self.assertEqual(run.name.splitlines()[-1], '14:32 ✓✓')
+        self.assertEqual(run.load()[0].name, 'hi')
         now = time.mktime((2026, 10, 30, 18, 0, 0, 0, 0, -1))
         self.assertEqual(chat.stamp(at, now), '14:32 · today')
         self.assertEqual(chat.stamp(at - 86400, now), '14:32 · yesterday')
@@ -384,7 +436,7 @@ class Live(unittest.TestCase):
         self.assertEqual(the_chat.shown()[0].kind, 'earlier')
         press(c, 'right')
         self.assertEqual(c.focus.kind, 'chat-message')
-        self.assertRegex(c.focus.label(), r'  \d\d:\d\d')                    # what it says, then when
+        self.assertRegex(c.focus.parent.label(), r'\n\d\d:\d\d')                    # what it says, then when
         self.assertFalse(p.pane_for(c.focus))                                 # no pane: it's on the canvas,
         self.assertIn(c.focus.label().split('  ')[0][:20], ''.join(screen(c)[:-2]))   # drawn there in full
 

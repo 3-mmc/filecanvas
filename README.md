@@ -20,6 +20,9 @@ Python 3.11 or newer and nothing else for the canvas itself; each twig says what
 | `cal` | calendars from .ics feeds and files, reminders, eras, and what-ifs that fork a day | — | `calcanvas` |
 | `tasks` | [tuido](https://github.com/3-mmc/TuiDo)'s desk: paths, library, habits, projects; due days, timers | tuido | `tuido --canvas` |
 
+In TuiDo’s Today list (and earlier pages), **Alt+↑ / Alt+↓** moves the selected entry.
+The order is saved; **Ctrl+Z** undoes a move.
+
 How each one works: [docs/msg.md](docs/msg.md), [docs/cal.md](docs/cal.md),
 [docs/core.md](docs/core.md) (the canvas, `files`, and writing a provider). For cdi:
 `eval "$(twigs files --init bash)"` in `~/.bashrc` (zsh and fish likewise).

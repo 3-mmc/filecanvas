@@ -74,15 +74,17 @@ Chats come from [nchat](https://github.com/3-mmc/nchat) (the `feature/serve` bra
 merged), which msgcanvas runs as `nchat --serve`: profiles (WhatsApp, Signal, Instagram, …) sit
 beside the mail accounts, each opening into its chats: the pinned ones on a branch of their own
 first (how many, and how many of them unread, beside it; it flashes when one of them hears from
-someone), then the rest, the latest first, each with how long since it last heard anything
+someone), then the rest. On a profile or a group, **⌃L** cycles date branches (Today, Yesterday,
+This week, …), name initials, and an ungrouped list; **⌃T** toggles Unread and Read branches.
+Both choices are remembered. Chats are the latest first, each with how long since it last heard anything
 (`4m`, `2h`, `yesterday`, `Tue`, `3 Oct`) in a column, turning over the moment it changes. In a
 chat, the bar says whether they're online, or when they were last (`seen 5m ago`), as WhatsApp
 tells it of the chat you're in. A chat with something unread is a beacon too, until you've been in
 and read it. A chat
 opens on the canvas itself into its latest 20 messages, oldest at the top: each person's messages
 in a row hang off their name (a chip in their own colour, the same in every chat, and never two
-alike in one), each whole, ending in its time and, if
-it's yours, ✓ (there) or ✓✓ (read). You land on the newest and stay on it as more come; **↑
+alike in one), each whole, with the times and, if
+they're yours, ✓ (there) or ✓✓ (read) underneath the sender's name. You land on the newest and stay on it as more come; **↑
 earlier** (Enter) shows 20 more. A chat you've opened wears its colour too (the other person's,
 or the group's), so open chats stand apart. A photo shows its picture in the pane beside.
 

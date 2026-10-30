@@ -143,7 +143,8 @@ def sections():
     c = accounts.chat_settings()
     if c['enabled'] and shutil.which(c['nchat']) and chat.has_profiles(c['confdir'] or chat.confdir()):
         out.append(('Messages', chat.Chat(c['nchat'], c['confdir'], state('nchat-serve.log'),
-                                          read_receipts=c['read_receipts'], typing=c['typing'], notify=c['notify'])))
+                                          read_receipts=c['read_receipts'], typing=c['typing'], notify=c['notify'],
+                                          remember=state('chat-view.json'))))
     return out
 
 
