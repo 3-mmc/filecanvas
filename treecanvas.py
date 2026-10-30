@@ -1349,7 +1349,7 @@ class Canvas:
             hint = 'esc cancel' if self.asking[3] is not None else '⏎ done  esc cancel  ⌃U clear  ⌃W word'
             lines.append(P.fg('hint') + hint[:full - 1] + '\033[0m')
         else:
-            acts = [h for _, _, h in self.source.actions(self.focus)] if not isinstance(self.focus, Stub) else []
+            acts = [h for _, _, h in self.source.actions(self.focus) if h] if not isinstance(self.focus, Stub) else []
             hint = '  '.join(acts + ['↑↓ move  →/tab open  ← parent  type filter  ⌃X fold  ' +
                                      ('pgup/pgdn scroll  ' if pane_w else '') + '⏎ choose  esc cancel'])
             lines.append(P.fg('hint') + clip(hint, full - 1) + '\033[0m')
