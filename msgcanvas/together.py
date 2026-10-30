@@ -65,6 +65,9 @@ class Together(fc.Provider):
     def beacon(self, node):
         return self.ask('beacon', node, None)
 
+    def glow(self, node):
+        return self.ask('glow', node, None)
+
     def next_change(self):
         """The soonest any of them changes by itself."""
         got = [t for t in (p.next_change() for p in self.providers) if t is not None]
