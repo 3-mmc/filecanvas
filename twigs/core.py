@@ -739,11 +739,13 @@ class Provider:
         a log's latest), and keeps to the end as it grows while you're there."""
         return False
 
-    def invalidate(self, path=None):
+    def invalidate(self, path=None, deep=False):
         """From any thread: fetch the children of the node with id `path` (of every node, with
-        None) again before the next frame. What's open and chosen stays where the ids still are."""
+        None) again before the next frame. What's open and chosen stays where the ids still are.
+        `deep`: and the children of everything loaded under it, a branch whose own branches follow
+        from it (a conversation's runs, which a new message joins)."""
         with STALE:
-            self.__dict__.setdefault('_stale', set()).add(path)
+            self.__dict__.setdefault('_stale', set()).add((path, 'deep') if deep and path else path)
         self.changed = True
         wake()
 
@@ -1053,6 +1055,7 @@ class Canvas:
         self._preview = (None, 0, None)     # (node, width, its lines) last shown there
         self._at_end = False                # the pane showed its last line
         self.asking = None                  # (prompt, text, done, choices, changed): the typing line, open
+        self.cursor = 0                     # and where in its text typing goes
         self.clock = time.monotonic         # for motion (tests set their own)
         self.wall = time.time               # for beacons and next_change(), which are dated
         self.flowing = False                # the last frame was mid-motion: the next must follow
@@ -1074,6 +1077,7 @@ class Canvas:
         returns ends the canvas unless it's None; it may ask again. changed(text) hears each
         edit, and changed(None) the line closing, however it closes."""
         self.asking = (prompt, text, done, choices, changed)
+        self.cursor = len(text)             # where typing goes: at the end, to begin with
 
     def status(self, key, text, state='busy'):
         """A chip in the bar, as Provider.status(), from an action."""
@@ -1147,14 +1151,15 @@ class Canvas:
         p = self.focus.parent       # on the last of a column that keeps to its last: stay on it
         follow = p is not None and p.kids is not None and self.source.start_at(p) == -1 and \
             bool(p.shown()) and self.focus is p.shown()[-1]
-        todo = [self.root]
+        deep = {p[0] for p in stale if isinstance(p, tuple)}
+        todo = [(self.root, False)]
         while todo:
-            n = todo.pop()
+            n, under = todo.pop()           # under: below a node fetched again deep
             if n.kids is None:
                 continue
-            if None in stale or n.path in stale:
+            if under or None in stale or n.path in stale or n.path in deep:
                 self.reload(n)
-            todo.extend(n.kids)
+            todo.extend((k, under or n.path in deep) for k in n.kids)
         self._preview = (self._preview[0], -1, self._preview[2])   # fetched again (-1), scrolled where it was
         self.reattach()
         if follow and self.focus.parent is p and p.shown():
@@ -1512,7 +1517,7 @@ class Canvas:
         if o.footer and not self.asking:
             lines.append(o.footer(full))
         elif self.asking:
-            hint = 'esc cancel' if self.asking[3] is not None else '⏎ done  esc cancel  ⌃U clear  ⌃W word'
+            hint = 'esc cancel' if self.asking[3] is not None else '⏎ done  esc cancel  ←→ ⌃←→ move  ⌃W word  ⌃U ⌃K clear'
             lines.append(P.fg('hint') + hint[:full - 1] + '\033[0m')
         else:
             acts = [h for _, _, h in self.source.actions(self.focus) if h] if not isinstance(self.focus, Stub) else []
@@ -1546,10 +1551,13 @@ class Canvas:
         P = self.paint
         head = P.on('bg', 'filter', True) + ' ' + printable(prompt) + ' ' + '\033[0m '
         room = max(4, w - cells(prompt) - 5)
-        text = printable(text)
-        while cells(text) > room - 1:
-            text = text[1:]
-        return head + ('' if choices is not None else P.fg('path', 1, True) + text + '▏') + '\033[0m'
+        at = max(0, min(self.cursor, len(text)))
+        before, after = printable(text[:at]), printable(text[at:])
+        while cells(before) > room - 1:             # long: the part around the cursor
+            before = before[1:]
+        while cells(before) + 1 + cells(after) > room:
+            after = after[:-1]
+        return head + ('' if choices is not None else P.fg('path', 1, True) + before + '▏' + after) + '\033[0m'
 
     def pane_rows(self, width, height):
         """The reading pane, `height` rows `width` wide: a line down its left side, the choice's
@@ -1768,20 +1776,42 @@ def init(shell, cmd='cdi', key='ctrl-t', run=None):
             .replace('@KEYDOC@', doc).rstrip() + '\n')
 
 
+CSI = re.compile(r'\x1b\[([0-9;]*)([A-Za-z~])|\x1bO([A-Za-z])')
+ARROWS = {'A': 'up', 'B': 'down', 'C': 'right', 'D': 'left', 'H': 'home', 'F': 'end'}
+TILDES = {'1': 'home', '7': 'home', '4': 'end', '8': 'end', '3': 'delete', '2': 'insert', '5': 'pgup', '6': 'pgdn'}
+MODS = {'2': 'shift-', '3': 'alt-', '4': 'alt-shift-', '5': 'ctrl-', '6': 'ctrl-shift-', '7': 'ctrl-alt-', '8': 'ctrl-alt-shift-'}
+
+
 def keys(data):
-    seq = {'\x1b[A': 'up', '\x1b[B': 'down', '\x1b[C': 'right', '\x1b[D': 'left',
-           '\x1bOA': 'up', '\x1bOB': 'down', '\x1bOC': 'right', '\x1bOD': 'left', '\x1b[Z': 'backtab',
-           '\x1b[5~': 'pgup', '\x1b[6~': 'pgdn',
-           # Alt with an arrow: the canvas leaves them to providers' actions (moving things, say)
-           '\x1b[1;3A': 'alt-up', '\x1b[1;3B': 'alt-down', '\x1b[1;3C': 'alt-right', '\x1b[1;3D': 'alt-left'}
+    """The keys in what the terminal sent: characters, and named keys for its sequences ('left',
+    'ctrl-left', 'alt-up', 'home', 'delete', 'pgdn', 'backtab'…). A sequence it doesn't know is
+    left out whole, never taken for Esc (Ctrl+arrows, say, mustn't close a canvas); 'esc' is a
+    lone Esc."""
     i = 0
     while i < len(data):
-        for s, name in seq.items():
-            if data.startswith(s, i):
-                yield name; i += len(s); break
-        else:
-            yield 'esc' if data[i] == '\x1b' else data[i]
+        if data[i] != '\x1b':
+            yield data[i]
             i += 1
+            continue
+        m = CSI.match(data, i)
+        if not m:
+            yield 'esc'
+            i += 1
+            continue
+        i = m.end()
+        params, final, ss3 = m.group(1) or '', m.group(2), m.group(3)
+        if ss3:
+            if ss3 in ARROWS:
+                yield ARROWS[ss3]
+            continue
+        parts = params.split(';')
+        mod = MODS.get(parts[1], '') if len(parts) > 1 else ''
+        if final in ARROWS:
+            yield mod + ARROWS[final]
+        elif final == 'Z':
+            yield 'backtab'
+        elif final == '~' and parts[0] in TILDES:
+            yield mod + TILDES[parts[0]]
 
 
 def apply(c, k, opts):
@@ -1827,8 +1857,26 @@ def apply(c, k, opts):
     return None
 
 
+def word_left(text, at):
+    while at > 0 and text[at - 1] == ' ':
+        at -= 1
+    while at > 0 and text[at - 1] != ' ':
+        at -= 1
+    return at
+
+
+def word_right(text, at):
+    while at < len(text) and text[at] == ' ':
+        at += 1
+    while at < len(text) and text[at] != ' ':
+        at += 1
+    return at
+
+
 def answer(c, k):
-    """A key while the typing line is open."""
+    """A key while the typing line is open: typed at the cursor, which moves by character (← →),
+    by word (Ctrl+← →, Alt+← →), to either end (Home End, ⌃A ⌃E); Backspace and Delete either
+    side of it, ⌃W the word before it, ⌃U all before it, ⌃K all after."""
     prompt, text, done, choices, changed = c.asking
     if k in ('esc', '\x03', '\x07'):
         c.asking = None
@@ -1842,15 +1890,31 @@ def answer(c, k):
     elif k in ('\r', '\n'):
         c.asking = None
     else:
-        if k in ('\x7f', '\x08'):
-            text = text[:-1]
-        elif k == '\x15':
-            text = ''
-        elif k == '\x17':                  # ⌃W: the last word
-            text = text.rstrip(' ')
-            text = text[:text.rfind(' ') + 1]
+        at = max(0, min(c.cursor, len(text)))
+        if k in ('left', 'right'):
+            at = max(0, at - 1) if k == 'left' else min(len(text), at + 1)
+        elif k in ('ctrl-left', 'alt-left'):
+            at = word_left(text, at)
+        elif k in ('ctrl-right', 'alt-right'):
+            at = word_right(text, at)
+        elif k in ('home', '\x01'):
+            at = 0
+        elif k in ('end', '\x05'):
+            at = len(text)
+        elif k in ('\x7f', '\x08'):
+            text, at = text[:max(0, at - 1)] + text[at:], max(0, at - 1)
+        elif k == 'delete':
+            text = text[:at] + text[at + 1:]
+        elif k == '\x15':                 # ⌃U: all before the cursor
+            text, at = text[at:], 0
+        elif k == '\x0b':                 # ⌃K: all after it
+            text = text[:at]
+        elif k == '\x17':                 # ⌃W: the word before it
+            start = word_left(text, at)
+            text, at = text[:start] + text[at:], start
         elif len(k) == 1 and k.isprintable():
-            text += k
+            text, at = text[:at] + k + text[at:], at + 1
+        c.cursor = at
         if changed and text != c.asking[1]:
             changed(text)
         c.asking = (prompt, text, done, choices, changed)

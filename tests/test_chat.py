@@ -242,6 +242,23 @@ class Behaviour(unittest.TestCase):
     def statuses(self):
         return [(w[2], w[3]) for w in self.signals if w[0] == 'status']
 
+    def test_your_messages_in_a_row_all_show_as_they_go(self):
+        canvas = fc.Canvas('', options(self.c))
+        say = lambda event: [self.c.changed_at(path) for path in self.s.apply(event)]
+        msg = lambda i, mine: {'id': f'm{i}', 'sender': 'me' if mine else 'ann', 'text': f'line {i}',
+                               'time': 1_700_000_000_000 + i * 1000, 'outgoing': mine}
+        say({'event': 'messages', 'profile': 'W_1', 'chat': 'ann', 'messages': [msg(1, False)]})
+        self.assertTrue(canvas.go([chat.profile_id('W_1'), chat.chat_id('W_1', 'ann')]))
+        fc.apply(canvas, 'right', canvas.opts)
+        shown = lambda: [m.name.split('  ')[0] for r in canvas.focus.parent.parent.shown() if r.kind == 'run'
+                         for m in r.shown()] if canvas.focus.kind == 'chat-message' else \
+            [m.name.split('  ')[0] for r in canvas.focus.parent.shown() if r.kind == 'run' for m in r.shown()]
+        screen(canvas)
+        for i in (2, 3, 4):                                     # three of yours, one after another
+            say({'event': 'sent', 'profile': 'W_1', 'chat': 'ann', 'ok': True, 'message': msg(i, True)})
+            screen(canvas)
+            self.assertEqual(shown(), [f'line {n}' for n in range(1, i + 1)])
+
     def test_sending_spins_then_ticks_or_fails(self):
         canvas = fc.Canvas('', options(fc.Tree({})))
         self.c.send(canvas, self.p, 'ann', 'hi')

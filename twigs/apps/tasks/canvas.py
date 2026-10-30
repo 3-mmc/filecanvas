@@ -92,9 +92,9 @@ class Desk(tc.Provider):
                 seen = now
                 self.invalidate()
 
-    def invalidate(self, path=None):
+    def invalidate(self, path=None, deep=False):
         self.memo.clear()           # anything may have changed: work it all out again
-        super().invalidate(path)
+        super().invalidate(path, deep)
 
     def remember(self, key, work):
         if key not in self.memo:

@@ -372,7 +372,11 @@ class Chat(fc.Provider):
         return fc.Node('', 'chat', True, source=self, kind='root')
 
     def changed_at(self, path):
-        """What's in the node `path` changed: a profile's chats are its pinned ones too."""
+        """What's in the node `path` changed: a profile's chats are its pinned ones too; a chat's
+        runs with it (a new message joins the last one: fetched again too, deep)."""
+        if path and path.startswith('/@') and path.count(SEP) == 1:
+            self.invalidate(path, deep=True)
+            return
         self.invalidate(path)
         if path and path.startswith('/@') and SEP not in path:
             self.invalidate(pinned_id(path))

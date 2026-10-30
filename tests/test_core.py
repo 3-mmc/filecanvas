@@ -864,3 +864,31 @@ class Glow(unittest.TestCase):
         c = fc.Canvas(d, options(color='truecolor', ls_colors=False, git=False, start=d, recent=False))
         press(c, 'right')
         self.assertIsNone(c.source.glow(c.focus))
+
+
+class Keys(unittest.TestCase):
+    def test_every_sequence_is_a_key_and_none_is_esc(self):
+        self.assertEqual(list(fc.keys('\x1b[1;5D\x1b[1;5C\x1b[1;2A\x1b[H\x1b[4~\x1b[3~\x1bOD\x1b[1;5Hx\x1b[99;9q')),
+                         ['ctrl-left', 'ctrl-right', 'shift-up', 'home', 'end', 'delete', 'left', 'ctrl-home', 'x'])
+        self.assertEqual(list(fc.keys('\x1b')), ['esc'])
+        self.assertEqual(list(fc.keys('\x1bx')), ['esc', 'x'])      # Alt+x, as it was
+
+    def test_ctrl_arrows_dont_close_the_canvas(self):
+        c = fc.Canvas('', options(provider=fc.Tree({'a': {'b': 1}, 'c': 1})))
+        for k in fc.keys('\x1b[1;5D\x1b[1;5C\x1b[1;5D'):
+            self.assertIsNone(fc.apply(c, k, c.opts))
+
+    def test_the_typing_line_edits_at_its_cursor(self):
+        c = fc.Canvas('', options(provider=fc.Tree({'a': 1})))
+        got = []
+        c.ask('say', lambda text: got.append(text), text='hello big world')
+        typed = lambda *ks: [fc.apply(c, k, c.opts) for k in ks]
+        typed('ctrl-left', 'ctrl-left', *'very ')                     # two words back: in front of 'big'
+        self.assertEqual((c.asking[1], c.cursor), ('hello very big world', 11))
+        typed('ctrl-right', '\x17')                                    # past 'big', then ⌃W: it's gone
+        self.assertEqual(c.asking[1], 'hello very  world')
+        typed('home', 'delete', *'H', 'end', '\x7f')
+        self.assertEqual(c.asking[1], 'Hello very  worl')
+        self.assertIn('Hello very  worl▏', ANSI.sub('', c.typing_line(80)))
+        typed('ctrl-left', '\x0b', '\x15', *'ok', '\r')                # ⌃K after, ⌃U before: just what's typed
+        self.assertEqual(got, ['ok'])
