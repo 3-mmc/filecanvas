@@ -499,6 +499,7 @@ class Node:
         self.filter = ""
         self.error = None
         self.row = self.depth = 0
+        self.entered = False    # opened before: it's chosen where you left it, not where it starts
         self.dirs_only = parent.dirs_only if parent else False
 
     def load(self):
@@ -594,6 +595,24 @@ class Provider:
     def preview(self, node):
         """What the reading pane shows for `node`: text (wrapped to fit), or None for nothing."""
         return None
+
+    def width(self, node):
+        """Columns `node`'s label wraps to, on as many lines as it takes; None: one line, cut at
+        --colmax (a name). A message, say, shows whole."""
+        return None
+
+    def chip(self, node):
+        """(fg, bg) to draw `node` as a chip, as the bar draws its path; None for plain text."""
+        return None
+
+    def start_at(self, node):
+        """Which of `node`'s children the canvas lands on the first time it's opened: an index,
+        or -1 for the last, which also keeps the choice on the last as more come (a conversation)."""
+        return 0
+
+    def pane_for(self, node):
+        """Whether the reading pane shows while `node` is chosen (when there is one)."""
+        return True
 
     def preview_end(self, node):
         """Whether the pane opens on the end of `node`'s preview (a conversation's newest lines,
@@ -835,15 +854,17 @@ def is_open(n, focus, peek):
     return n.is_dir and (n.open or (peek and n is focus))
 
 
-def layout(n, opts, focus):
-    """Rows relative to `n` for its subtree; returns its contour: [(top, bottom)] per depth."""
+def layout(n, opts, focus, tall=lambda n: 1):
+    """Rows relative to `n` for its subtree; returns its contour: [(top, bottom)] per depth.
+    tall(node): how many lines it takes."""
+    h = tall(n)
     if not is_open(n, focus, opts.peek):
-        return [(0, 0)]
+        return [(0, h - 1)]
     kids = window(n, opts.limit)
     n._shown = kids
     acc, ys = [], []
     for k in kids:
-        c = layout(k, opts, focus)
+        c = layout(k, opts, focus, tall)
         y = ys[-1] + 1 if ys else 0
         for d in range(min(len(acc), len(c))):
             # Keep clear of what's already placed at every depth; a blank row between cousins.
@@ -854,10 +875,10 @@ def layout(n, opts, focus):
             else:
                 acc.append((t + y, b + y))
         ys.append(y)
-    shift = -((ys[0] + ys[-1]) // 2)    # centred on the parent's row
+    shift = -((ys[0] + ys[-1] + tall(kids[-1]) - 1) // 2)    # centred on the parent's row
     for k, y in zip(kids, ys):
         k._rel = y + shift
-    return [(0, 0)] + [(t + shift, b + shift) for t, b in acc]
+    return [(0, h - 1)] + [(t + shift, b + shift) for t, b in acc]
 
 
 def place(n, row, depth, focus, opts, out):
@@ -963,6 +984,9 @@ class Canvas:
         stale = self.source.stale()
         if not stale:
             return
+        p = self.focus.parent       # on the last of a column that keeps to its last: stay on it
+        follow = p is not None and p.kids is not None and self.source.start_at(p) == -1 and \
+            bool(p.shown()) and self.focus is p.shown()[-1]
         todo = [self.root]
         while todo:
             n = todo.pop()
@@ -973,6 +997,8 @@ class Canvas:
             todo.extend(n.kids)
         self._preview = (self._preview[0], -1, self._preview[2])   # fetched again (-1), scrolled where it was
         self.reattach()
+        if follow and self.focus.parent is p and p.shown():
+            p.sel, self.focus = len(p.shown()) - 1, p.shown()[-1]
 
     def reload(self, node):
         old = {k.path: k for k in node.kids}
@@ -1024,7 +1050,11 @@ class Canvas:
         f.open = True
         kids = f.shown()
         if kids:
-            f.sel = min(f.sel, len(kids) - 1)
+            if not f.entered:
+                f.entered = True
+                at = self.source.start_at(f)
+                f.sel = len(kids) - 1 if at == -1 else at
+            f.sel = max(0, min(f.sel, len(kids) - 1))
             self.focus = kids[f.sel]
 
     def leave(self):
@@ -1076,21 +1106,32 @@ class Canvas:
             self.told = self.focus
             self.source.focus(self.focus)
         full = w            # the tree gets what the reading pane leaves
-        pane_w = int(w * o.pane_width) if self.pane and w >= 60 else 0
+        shows = isinstance(self.focus, Stub) or self.source.pane_for(self.focus)
+        pane_w = int(w * o.pane_width) if self.pane and w >= 60 and shows else 0
         w -= pane_w
-        layout(self.root, o, self.focus)
+        drawn = {}
+
+        def lines_of(n):
+            """A node's label as the lines it's drawn on: one, cut at colmax, or wrapped to its width."""
+            got = drawn.get(id(n))
+            if got is None:
+                width = None if isinstance(n, Stub) else self.source.width(n)
+                text = n.label()
+                got = wrap(text, width) if width else [clip(printable(l), o.colmax) for l in text.split('\n')]
+                drawn[id(n)] = got = got or ['']
+            return got
+        layout(self.root, o, self.focus, lambda n: len(lines_of(n)))
         nodes = []
         place(self.root, 0, 0, self.focus, o, nodes)
 
-        def text_of(n):
-            return clip(printable(n.label()), o.colmax)
-
-        marks = {}   # (the mark beside it, how bright it is) per entry
+        marks, chips = {}, {}   # (the mark beside it, how bright it is), and its chip colours, per entry
         for n in nodes:
-            marks[id(n)] = (None, 1.0) if isinstance(n, Stub) else (self.source.mark(n), self.source.dim(n))
+            stub = isinstance(n, Stub)
+            marks[id(n)] = (None, 1.0) if stub else (self.source.mark(n), self.source.dim(n))
+            chips[id(n)] = None if stub else self.source.chip(n)
         widths = {}
         for n in nodes:
-            wd = cells(text_of(n)) + (2 if marks[id(n)][0] else 0)
+            wd = max(cells(l) for l in lines_of(n)) + (2 if marks[id(n)][0] else 0) + (2 if chips[id(n)] else 0)
             widths[n.depth] = max(widths.get(n.depth, 0), wd)
         extra = o.gap + (1 if cap_r else 0)
         xs = [0]
@@ -1173,17 +1214,20 @@ class Canvas:
 
         for n in nodes:
             x = xs[n.depth]
-            text = text_of(n)
-            mark = marks[id(n)][0]
-            if n is self.focus:
-                put(x, n.row, ' ' + text + ' ', P.on('sel_fg', 'sel_bg', True))
+            lines = lines_of(n)
+            text, widest = lines[0], max(cells(l) for l in lines)
+            mark, chip = marks[id(n)][0], chips[id(n)]
+            if n is self.focus or chip:      # a block: the choice in its colours, a chip in its own
+                fg, bg = ('sel_fg', 'sel_bg') if n is self.focus else chip
+                for i, l in enumerate(lines):
+                    put(x, n.row + i, ' ' + l + ' ' * (widest - cells(l) + 1), P.on(fg, bg, True))
                 if cap_l:
-                    put(x - 1, n.row, cap_l, P.fg('sel_bg'))
-                cur = x + cells(text) + 2
+                    put(x - 1, n.row, cap_l, P.fg(bg))
+                cur = x + widest + 2
                 if cap_r:
-                    put(cur, n.row, cap_r, P.fg('sel_bg'))
+                    put(cur, n.row, cap_r, P.fg(bg))
                     cur += 1
-                s = 1.0
+                s = 1.0 if n is self.focus else strength(n)
             else:
                 if id(n) in path:  # the way you came: its own colours with --grey-rest, else the path's
                     c, bold = self.colour(n) if o.grey_rest else ('path', True)
@@ -1198,7 +1242,8 @@ class Canvas:
                     t = (now - self.pulses[n.path]) / PULSE      # from the highlight back to itself
                     style = P.fg(blend(T.get('sel_bg', 214), T.get(c, c) if isinstance(c, str) else c, t),
                                  1 - (1 - s) * t, True)
-                put(x, n.row, text, style)
+                for i, l in enumerate(lines):
+                    put(x, n.row + i, l, style)
                 cur = x + cells(text)
             if mark:
                 role, glyph, ascii_ = mark

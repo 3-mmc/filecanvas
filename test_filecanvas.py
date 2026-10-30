@@ -413,6 +413,72 @@ class Motion(unittest.TestCase):
         press(c, 'x', 'esc')
         self.assertEqual(heard, ['h', 'hi', 'h', None, 'x', None])
 
+
+class Conversation(Live):
+    """Messages under people: wrapped, the people as chips, opening on (and keeping to) the last."""
+    def width(self, node):
+        return 20 if not node.is_dir else None
+
+    def chip(self, node):
+        return ('person_fg', 'person0') if node.is_dir and node.parent and node.parent.parent else None
+
+    def start_at(self, node):
+        return -1
+
+    def pane_for(self, node):
+        return node.name == 'photo'
+
+
+class TallNodes(unittest.TestCase):
+    def canvas(self, data):
+        c = fc.Canvas('', options(provider=Conversation(data)))
+        return c
+
+    def test_a_long_message_wraps_and_its_neighbour_starts_below_it(self):
+        data = {'chat': {'ann': {'m1': 1, 'm2': 2}}}
+        long = 'a message long enough to wrap onto three lines here'
+        c = fc.Canvas('chat/ann', options(provider=Conversation(data)))
+        data['chat']['ann'] = {long: 1, 'short one': 2}
+        c.source.invalidate()
+        lines, _ = c.frame(100, 20, animate=False)
+        text = [ANSI.sub('', l).rstrip() for l in lines]
+        rows = [i for i, l in enumerate(text[:-2]) if 'a message long' in l or 'enough to wrap' in l or 'three lines here' in l
+                or 'short one' in l]
+        self.assertEqual(len(rows), 4)                              # three for the long one, one for its neighbour
+        self.assertEqual(rows, list(range(rows[0], rows[0] + 4)))   # one under the other, none on top of another
+        self.assertTrue(all(fc.cells(l) <= 100 for l in text))
+
+    def test_the_choice_lights_every_line_and_chips_draw_in_their_colours(self):
+        data = {'chat': {'ann': {'one two three four five six seven': 1}}}
+        c = fc.Canvas('chat/ann', options(provider=Conversation(data)))
+        lines, _ = c.frame(100, 16, animate=False)
+        lit = c.paint.on('sel_fg', 'sel_bg', True)
+        self.assertEqual(sum(1 for l in lines if lit in l), 2)     # both of its lines
+        self.assertIn(c.paint.on('person_fg', 'person0', True) + ' ann ', ''.join(lines))   # its sender, a chip
+
+    def test_it_opens_on_the_last_and_keeps_to_it(self):
+        data = {'chat': {'ann': {'m1': 1, 'm2': 2, 'm3': 3}}}
+        c = fc.Canvas('chat', options(provider=Conversation(data)))
+        press(c, 'right')
+        self.assertEqual(c.focus.name, 'm3')
+        data['chat']['ann']['m4'] = 4
+        c.source.invalidate()
+        c.frame(100, 16, animate=False)
+        self.assertEqual(c.focus.name, 'm4')                        # on the last: it follows
+        press(c, 'up')
+        data['chat']['ann']['m5'] = 5
+        c.source.invalidate()
+        c.frame(100, 16, animate=False)
+        self.assertEqual(c.focus.name, 'm3')                        # further up: it stays
+        press(c, 'left', 'right')
+        self.assertEqual(c.focus.name, 'm3')                        # back in: where you were
+
+    def test_the_pane_shows_only_where_it_should(self):
+        c = fc.Canvas('', options(provider=Conversation({'photo': 1, 'text': 2})))
+        self.assertIn('│', ''.join(screen(c)))
+        press(c, 'down')
+        self.assertNotIn('│ ', ''.join(screen(c)))
+
 class Wrap(unittest.TestCase):
     def test_breaks_at_spaces_and_cuts_long_words(self):
         self.assertEqual(fc.wrap('the quick brown fox', 10), ['the quick', 'brown fox'])
