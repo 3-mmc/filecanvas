@@ -1,4 +1,4 @@
-# Vendored from treecanvas (github.com/3-mmc/treecanvas) at ce12979: do not edit here.
+# Vendored from treecanvas (github.com/3-mmc/treecanvas) at 9170aa0: do not edit here.
 # Change it there and run tools/vendor-treecanvas.py; msgcanvas's own choices are in its providers.
 """treecanvas: a tree as one canvas you move across; the file system, unless you give it another.
 (It was filecanvas: the file system is still what it shows by default.)
@@ -44,6 +44,7 @@ OLD_CONFIG = CONFIG.replace(os.sep + 'treecanvas' + os.sep, os.sep + 'filecanvas
 #   repo_clean_* repo_dirty_*                the bar's git chip
 #   git_dirty git_staged git_untracked git_conflict   the marks beside changed entries
 #   person0 … person9, person_fg       chips for people (a chat's senders), and their text
+#   state_done state_doing             what's finished and what's under way (a task tree's)
 # `ls_colors` is the theme's default for --ls-colors; you can still change it.
 THEMES = {
     'powerline': {  # powerline-shell's default theme
@@ -53,6 +54,7 @@ THEMES = {
         'repo_clean_bg': 148, 'repo_clean_fg': 0, 'repo_dirty_bg': 161, 'repo_dirty_fg': 15,
         'git_dirty': 161, 'git_staged': 148, 'git_untracked': 130, 'git_conflict': 9,
         'rest': 248, 'ghost': 237, 'ls_colors': True,
+        'state_done': 114, 'state_doing': 179,
         'person_fg': 15, 'person0': 24, 'person1': 23, 'person2': 58, 'person3': 96, 'person4': 130, 'person5': 61,
         'person6': 28, 'person7': 161, 'person8': 91, 'person9': 17,
     },
@@ -63,6 +65,7 @@ THEMES = {
         'repo_clean_bg': 136, 'repo_clean_fg': 232, 'repo_dirty_bg': 166, 'repo_dirty_fg': 232,
         'git_dirty': 166, 'git_staged': 142, 'git_untracked': 137, 'git_conflict': 196,
         'rest': 246, 'ghost': 237, 'ls_colors': True,
+        'state_done': 107, 'state_doing': 214,
         'person_fg': 230, 'person0': 94, 'person1': 130, 'person2': 58, 'person3': 95, 'person4': 23, 'person5': 88,
         'person6': 22, 'person7': 54, 'person8': 60, 'person9': 125,
     },
@@ -76,6 +79,7 @@ THEMES = {
         'repo_dirty_fg': '#eceff4', 'git_dirty': '#d08770', 'git_staged': '#a3be8c',
         'git_untracked': '#b48ead', 'git_conflict': '#bf616a',
         'rest': '#a7adba', 'ghost': '#434c5e', 'ls_colors': True,
+        'state_done': '#a3be8c', 'state_doing': '#ebcb8b',
         'person_fg': '#eceff4', 'person0': '#4c6a94', 'person1': '#3e6573', 'person2': '#56653a', 'person3': '#6a4a6a', 'person4': '#8c5040', 'person5': '#4e5c88',
         'person6': '#337744', 'person7': '#773355', 'person8': '#553377', 'person9': '#776633',
     },
@@ -89,6 +93,7 @@ THEMES = {
         'repo_dirty_fg': '#ebdbb2', 'git_dirty': '#fe8019', 'git_staged': '#b8bb26',
         'git_untracked': '#d3869b', 'git_conflict': '#fb4934',
         'rest': '#a89984', 'ghost': '#504945', 'ls_colors': True,
+        'state_done': '#b8bb26', 'state_doing': '#fabd2f',
         'person_fg': '#282828', 'person0': '#83a598', 'person1': '#8ec07c', 'person2': '#b8bb26', 'person3': '#d3869b', 'person4': '#fe8019', 'person5': '#fabd2f',
         'person6': '#a89984', 'person7': '#c9a0dc', 'person8': '#7fb4ca', 'person9': '#e9b4a0',
     },
@@ -102,6 +107,7 @@ THEMES = {
         'repo_dirty_fg': '#fdf6e3', 'git_dirty': '#cb4b16', 'git_staged': '#859900',
         'git_untracked': '#6c71c4', 'git_conflict': '#dc322f',
         'rest': '#839496', 'ghost': '#073642', 'ls_colors': True,
+        'state_done': '#859900', 'state_doing': '#b58900',
         'person_fg': '#002b36', 'person0': '#3693d6', 'person1': '#2aa198', 'person2': '#859900', 'person3': '#8487cc', 'person4': '#df619a', 'person5': '#d77148',
         'person6': '#b58900', 'person7': '#93a1a1', 'person8': '#e5726f', 'person9': '#a0d070',
     },
@@ -576,8 +582,8 @@ class Provider:
         fg, bg, bold) in theme roles. When there's no room, segments after the first give way."""
         names = []
         while node.parent:
-            names.append(self.label(node)); node = node.parent
-        segs = [(self.label(node) or '⌂', 'home_fg', 'home_bg', False)]
+            names.append(self.label(node).split('\n')[0]); node = node.parent
+        segs = [(self.label(node).split('\n')[0] or '⌂', 'home_fg', 'home_bg', False)]
         names.reverse()
         for i, name in enumerate(names):
             last = i == len(names) - 1
@@ -585,13 +591,15 @@ class Provider:
         return segs, []
 
     def choose(self, node):
-        """Enter: what the canvas ends with (pick() returns it), or None to stay on it."""
+        """Enter: what the canvas ends with (pick() returns it), or None to stay on it (a branch
+        opens), or STAY to stay without opening it (Enter did something to it)."""
         return node.path
 
     def actions(self, node):
         """Keys handled on `node`: [(key, name, hint)]. A key is a control character the canvas
-        and the usual terminals leave free (⌃A ⌃D ⌃E ⌃F ⌃K ⌃L ⌃N ⌃O ⌃P ⌃R ⌃S ⌃T ⌃W ⌃Y: not ⌃B,
-        tmux's, nor ⌃V, Windows Terminal's paste); the hint ('⌃R reply') is shown along the bottom."""
+        and the usual terminals leave free (⌃A ⌃D ⌃E ⌃F ⌃K ⌃L ⌃N ⌃O ⌃P ⌃R ⌃S ⌃T ⌃W ⌃Y ⌃Z: not ⌃B,
+        tmux's, nor ⌃V, Windows Terminal's paste), or 'alt-up' … 'alt-left' for Alt with an arrow;
+        the hint ('⌃R reply') is shown along the bottom."""
         return []
 
     def act(self, node, name, canvas):
@@ -611,6 +619,20 @@ class Provider:
 
     def chip(self, node):
         """(fg, bg) to draw `node` as a chip, as the bar draws its path; None for plain text."""
+        return None
+
+    def count(self, node):
+        """A number for `node` (unread mail, say), (text, colour, bold): the column of them is
+        right-aligned after the column's names, so they line up to be read down. None for none."""
+        return None
+
+    def mark_before(self, node):
+        """Whether `node`'s mark goes before its label (a task's ✓), not after (a file's git ●).
+        A column with any mark before keeps room for one, so its labels line up."""
+        return False
+
+    def line(self, node):
+        """A colour for the branch line that leads into `node` (its state, say); None: the canvas's."""
         return None
 
     def start_at(self, node):
@@ -671,6 +693,7 @@ class Provider:
 
 
 STALE = threading.Lock()
+STAY = object()     # choose(): stay on the canvas, and don't open the branch either
 
 
 class FileSystem(Provider):
@@ -1043,6 +1066,23 @@ class Canvas:
             p.sel = p.shown().index(self.focus)
 
     # -- moving
+    def go(self, ids):
+        """Choose the node at the end of `ids` (the ids from below the root down to it), opening the
+        way there as a link would, a filter in the way cleared. False if it isn't there."""
+        node = self.root
+        for want in ids:
+            hit = next((k for k in node.load() if k.path == want), None)
+            if hit is None:
+                return False
+            node.open = node.entered = True
+            if not any(k is hit for k in node.shown()):
+                node.filter = ''
+            shown = node.shown()
+            node.sel = next((i for i, k in enumerate(shown) if k is hit), 0)
+            node = hit
+        self.focus = node
+        return True
+
     def siblings(self):
         p = self.focus.parent
         return p.shown() if p else [self.focus]
@@ -1145,10 +1185,18 @@ class Canvas:
             stub = isinstance(n, Stub)
             marks[id(n)] = (None, 1.0) if stub else (self.source.mark(n), self.source.dim(n))
             chips[id(n)] = None if stub else self.source.chip(n)
-        widths = {}
+        before = {id(n) for n in nodes if marks[id(n)][0] and self.source.mark_before(n)}
+        leads = {n.depth: 2 for n in nodes if id(n) in before}    # room for a mark before, the column over
+        counts = {id(n): self.source.count(n) for n in nodes if not isinstance(n, Stub)}
+        counts = {k: v for k, v in counts.items() if v and v[0]}
+        names, numbers = {}, {}      # per column: how wide its names are, and its numbers
         for n in nodes:
-            wd = max(cells(l) for l in lines_of(n)) + (2 if marks[id(n)][0] else 0) + (2 if chips[id(n)] else 0)
-            widths[n.depth] = max(widths.get(n.depth, 0), wd)
+            wd = max(cells(l) for l in lines_of(n)) + (2 if marks[id(n)][0] and id(n) not in before else 0) + \
+                (2 if chips[id(n)] else 0) + leads.get(n.depth, 0)
+            names[n.depth] = max(names.get(n.depth, 0), wd)
+            if id(n) in counts:
+                numbers[n.depth] = max(numbers.get(n.depth, 0), cells(counts[id(n)][0]))
+        widths = {d: w + (numbers[d] + 2 if d in numbers else 0) for d, w in names.items()}
         extra = o.gap + (1 if cap_r else 0)
         xs = [0]
         for d in range(max(widths) + 1):
@@ -1229,7 +1277,7 @@ class Canvas:
             return max(s * marks[id(n)][1], 0.3)
 
         for n in nodes:
-            x = xs[n.depth]
+            x = xs[n.depth] + leads.get(n.depth, 0)
             lines = lines_of(n)
             text, widest = lines[0], max(cells(l) for l in lines)
             mark, chip = marks[id(n)][0], chips[id(n)]
@@ -1261,10 +1309,18 @@ class Canvas:
                 for i, l in enumerate(lines):
                     put(x, n.row + i, l, style)
                 cur = x + cells(text)
-            if mark:
+            if mark and id(n) in before:
+                role, glyph, ascii_ = mark
+                put(x - 2, n.row, ascii_ if plain else glyph, P.fg(role, s))
+            elif mark:
                 role, glyph, ascii_ = mark
                 put(cur + 1, n.row, ascii_ if plain else glyph, P.fg(role, s))
                 cur += 2
+            if id(n) in counts:          # right-aligned in the column's own, after its names
+                text_n, role, bold = counts[id(n)]
+                right = xs[n.depth] + names[n.depth] + 2 + numbers[n.depth]
+                put(right - cells(text_n), n.row, text_n, P.fg(role, s, bold))
+                cur = right
             if is_open(n, self.focus, o.peek) and n._shown:
                 kids = n._shown
                 hot = id(n) in path and any(id(k) in path for k in kids)
@@ -1275,6 +1331,9 @@ class Canvas:
                 put(end, n.row, '─' * max(0, spine - end), lit if hot else line)
                 top, bot = kids[0].row, kids[-1].row
                 rows = {k.row for k in kids}
+                strength_of_line = STRENGTH[min(dist(n) * 2, len(STRENGTH) - 1)]
+                own = {k.row: P.fg(c, strength_of_line) for k in kids     # a child's own colour, into it
+                       if not isinstance(k, Stub) and (c := self.source.line(k)) is not None}
                 chosen = next((k for k in kids if id(k) in path), None) if hot else None
                 for y in range(min(top, n.row), max(bot, n.row) + 1):
                     if y == n.row:
@@ -1285,9 +1344,9 @@ class Canvas:
                         ch = '│'
                     # the lit part of the spine runs from the parent's row to the chosen child's
                     on = chosen is not None and min(n.row, chosen.row) <= y <= max(n.row, chosen.row)
-                    put(spine, y, ch, lit if on else line)
+                    put(spine, y, ch, lit if on else own.get(y, line))
                 for k in kids:
-                    put(spine + 1, k.row, '─', lit if chosen is k else line)
+                    put(spine + 1, k.row, '─', lit if chosen is k else own.get(k.row, line))
 
         self.backdrop_under(grid, 1 if o.header else 0)
         lines = [o.header(full)] if o.header else []
@@ -1306,7 +1365,7 @@ class Canvas:
             hint = 'esc cancel' if self.asking[3] is not None else '⏎ done  esc cancel  ⌃U clear  ⌃W word'
             lines.append(P.fg('hint') + hint[:full - 1] + '\033[0m')
         else:
-            acts = [h for _, _, h in self.source.actions(self.focus)] if not isinstance(self.focus, Stub) else []
+            acts = [h for _, _, h in self.source.actions(self.focus) if h] if not isinstance(self.focus, Stub) else []
             hint = '  '.join(acts + ['↑↓ move  →/tab open  ← parent  type filter  ⌃X fold  ' +
                                      ('pgup/pgdn scroll  ' if pane_w else '') + '⏎ choose  esc cancel'])
             lines.append(P.fg('hint') + clip(hint, full - 1) + '\033[0m')
@@ -1560,7 +1619,9 @@ def init(shell, cmd='cdi', key='ctrl-t', run=None):
 def keys(data):
     seq = {'\x1b[A': 'up', '\x1b[B': 'down', '\x1b[C': 'right', '\x1b[D': 'left',
            '\x1bOA': 'up', '\x1bOB': 'down', '\x1bOC': 'right', '\x1bOD': 'left', '\x1b[Z': 'backtab',
-           '\x1b[5~': 'pgup', '\x1b[6~': 'pgdn'}
+           '\x1b[5~': 'pgup', '\x1b[6~': 'pgdn',
+           # Alt with an arrow: the canvas leaves them to providers' actions (moving things, say)
+           '\x1b[1;3A': 'alt-up', '\x1b[1;3B': 'alt-down', '\x1b[1;3C': 'alt-right', '\x1b[1;3D': 'alt-left'}
     i = 0
     while i < len(data):
         for s, name in seq.items():
@@ -1585,6 +1646,8 @@ def apply(c, k, opts):
         return None if done is None else ('done', done)
     if k in ('\r', '\n'):
         chosen = c.source.choose(c.focus)
+        if chosen is STAY:
+            return None
         if chosen is not None:
             return 'done', chosen
         c.enter()       # staying on the canvas: a branch opens

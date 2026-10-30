@@ -11,7 +11,8 @@ import os, shutil, subprocess, sys
 
 from . import accounts, treecanvas as fc
 
-LOOK = dict(colmax=40, glyphs='plain', ease=1 if os.environ.get('CDECK_CALM') else 0.3)
+# peek: the branch you're on shows what's in it before you go in (a message, what it says)
+LOOK = dict(colmax=40, glyphs='plain', ease=1 if os.environ.get('CDECK_CALM') else 0.3, peek=True)
 
 
 def need(*tools):
@@ -122,7 +123,7 @@ def browse(start):
         found = configured()
         if found:
             defaults = accounts.load()[0]
-            providers.append(mail.Mail(found, notify=defaults.get('notify', True)))
+            providers.append(mail.Mail(found, notify=defaults.get('notify', True), remember=state('mail-view.json')))
     c = accounts.chat_settings()
     if c['enabled'] and shutil.which(c['nchat']) and chat.has_profiles(c['confdir'] or chat.confdir()):
         providers.append(chat.Chat(c['nchat'], c['confdir'], state('nchat-serve.log'), read_receipts=c['read_receipts'],

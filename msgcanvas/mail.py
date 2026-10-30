@@ -3,13 +3,17 @@ thread's messages as the tree of who replied to whom. The reading pane shows the
 
 Read from notmuch's index of the maildirs mbsync keeps (accounts.py); nothing here changes mail
 yet. A thread watches notmuch's revision, so mail that `msgcanvas sync` brings in appears."""
-import email, email.policy, email.utils, hashlib, html.parser, os, re, subprocess, threading, time
+import email, email.policy, email.utils, hashlib, html.parser, json, os, re, subprocess, threading, time, zlib
 
 import notmuch2
 
 from . import compose, files, treecanvas as fc
 
 # Folders shown first, in this order, by the start of their name in English, German or Czech.
+BODY_WIDTH = 66       # columns a message's body wraps to on the canvas
+BODY_LINES = 40       # lines of a body shown at first; ↓ more shows MORE_LINES more
+MORE_LINES = 80
+
 ORDER = (('INBOX',), ('Sent', 'Gesendet', 'Odeslan'), ('Drafts', 'Entwürfe', 'Koncept'),
          ('Archive', 'Archiv'), ('Starred', 'Markiert', 'S hvězdičkou'),
          ('Junk', 'Spam', 'Nevyžádan'), ('Trash', 'Deleted', 'Gelöscht', 'Papierkorb', 'Koš'))
@@ -39,6 +43,47 @@ def who(header):
     """The name in a From line, else the address's mailbox."""
     name, addr = email.utils.parseaddr(header or '')
     return name or addr.split('@')[0] or '(nobody)'
+
+
+def when_group(stamp, now=None):
+    """Which group a thread whose newest message came at `stamp` is in, by date."""
+    t, now = time.localtime(stamp), time.localtime(now or time.time())
+    day = lambda x: time.mktime((x.tm_year, x.tm_mon, x.tm_mday, 0, 0, 0, 0, 0, -1))
+    today = day(now)
+    since = today - day(t)
+    if since <= 0:
+        return 'Today'
+    if since <= 86400 + 3600:                   # (a summer-time change makes a day 23 or 25 hours)
+        return 'Yesterday'
+    monday = today - now.tm_wday * 86400
+    if stamp >= monday:
+        return 'This week'
+    if stamp >= monday - 7 * 86400:
+        return 'Last week'
+    if (t.tm_year, t.tm_mon) == (now.tm_year, now.tm_mon):
+        return 'Earlier this month'
+    if t.tm_year == now.tm_year:
+        return time.strftime('%B', t)
+    return str(t.tm_year)
+
+
+def first_author(authors):
+    """Who began a thread, from notmuch's authors ('Ann, Bo| Cy': matched ones before the |)."""
+    return (authors or '').replace('|', ',').split(',')[0].strip() or '(nobody)'
+
+
+def body_text(msg):
+    """A message's text: its plain part, else its HTML as text."""
+    part = msg.get_body(preferencelist=('plain', 'html'))
+    if part is None:
+        return ''
+    try:
+        body = part.get_content()
+    except (LookupError, ValueError):
+        body = (part.get_payload(decode=True) or b'').decode('utf-8', 'replace')
+    if part.get_content_type() == 'text/html':
+        body = html_text(body)
+    return body.replace('\r', '').strip()
 
 
 def folder_name(rel):
@@ -138,17 +183,41 @@ def any_of(msgs, key):
 
 
 class Mail(fc.Provider):
-    """Accounts (accounts.Account) → folders → threads → messages, each with its replies.
+    """Accounts (accounts.Account) → folders → groups (by date, by sender, or none) → threads →
+    messages, each with its replies; the message you're on opens onto what it says, on the
+    canvas: its subject, who it's from and to (in their colours), when, its body, what's attached.
     `KINDS` are the node kinds it answers for."""
-    KINDS = ('account', 'folder', 'thread', 'message', 'drafts', 'draft')
-    pane = True
+    KINDS = ('account', 'folder', 'group', 'thread', 'message', 'subject', 'person', 'when', 'body', 'more',
+             'attachment', 'drafts', 'draft')
+    pane = True             # only for a message's pictures (pane_for)
+    GROUPINGS = ('date', 'sender', 'all')
 
-    def __init__(self, accounts, watch=2.0, pick=None, notify=True):
+    def __init__(self, accounts, watch=2.0, pick=None, notify=True, grouping='date', remember=None):
         self.accounts, self.notify = accounts, notify
         self.pick = pick or (lambda start: fc.pick(start, glyphs='plain'))   # a file, to attach
+        self.remember_in = remember             # a file the grouping is kept in, from one time to the next
+        self.grouping = self.recall() or grouping
+        self.lines = {}                         # a message's path: how many lines of its body show
+        self.parsed = {}                        # a message's path: what's in it, read once
         self._seen = None
         if watch:
             threading.Thread(target=self.watch, args=(watch,), daemon=True).start()
+
+    def recall(self):
+        try:
+            with open(self.remember_in) as f:
+                got = json.load(f).get('grouping')
+            return got if got in self.GROUPINGS else None
+        except (TypeError, OSError, ValueError):
+            return None
+
+    def keep(self):
+        if self.remember_in:
+            try:
+                with open(self.remember_in, 'w') as f:
+                    json.dump({'grouping': self.grouping}, f)
+            except OSError:
+                pass
 
     def loading(self):
         """(what's loading, whether it's done), for the opening screen."""
@@ -202,16 +271,24 @@ class Mail(fc.Provider):
 
     def children(self, node):
         try:
-            if node.kind == 'root':
+            k = node.kind
+            if k == 'root':
                 return [fc.Node('/' + a.key, a.name, True, node, 'account', data=a) for a in self.accounts]
-            if node.kind == 'account':
+            if k == 'account':
                 return self.folders(node)
-            if node.kind == 'folder':
-                return self.threads(node)
-            if node.kind == 'drafts':
+            if k == 'folder':
+                return self.groups(node) if self.grouping != 'all' else self.threads(node, node.data['query'])
+            if k == 'group':
+                return self.threads(node, node.data['query'], node.data['tids'])
+            if k == 'drafts':
                 return [self.draft_node(path, node) for path in compose.drafts(node.parent.data)]
-            return [self.message_node(m, node) for m in
-                    (node.data['messages'] if node.kind == 'thread' else node.data['replies'])]
+            if k == 'thread' and node.data['count'] == 1:
+                return self.contents(node, node.data['messages'][0])
+            if k == 'thread':
+                return [self.message_node(m, node) for m in node.data['messages']]
+            if k == 'message':
+                return self.contents(node, node.data) + [self.message_node(m, node) for m in node.data['replies']]
+            return []
         except notmuch2.NotmuchError as e:
             raise OSError(0, f'notmuch: {e}') from e
 
@@ -238,18 +315,92 @@ class Mail(fc.Provider):
             raise OSError(0, 'no mail yet: msgcanvas sync')
         return nodes
 
-    def threads(self, node):
-        out = []
+    def groups(self, node):
+        """A folder's threads in groups: by when the newest message in each came (Today, Yesterday,
+        This week…, each month this year, each year before), or by who wrote first. One pass over
+        the threads' dates and authors, nothing else read; a group's threads load when it opens."""
+        found = {}                              # group: [(newest, tid, unread)]
         with database() as db:
             for t in db.threads(node.data['query'], sort=notmuch2.Database.SORT.NEWEST_FIRST):
+                tags = set(t.tags)
+                key = when_group(t.last) if self.grouping == 'date' else first_author(t.authors)
+                found.setdefault(key, []).append((t.last, t.threadid, 'unread' in tags))
+        if not found:
+            raise OSError(0, 'empty')
+        order = sorted(found, key=lambda g: -found[g][0][0])                 # the newest group first
+        return [fc.Node(f'{node.path}{SEP}{self.grouping}:{g}', g, True, node, 'group',
+                        data=dict(query=node.data['query'], tids=[tid for _, tid, _ in found[g]],
+                                  unread=sum(u for _, _, u in found[g])))
+                for g in order]
+
+    def threads(self, node, query, tids=None):
+        out = []
+        with database() as db:
+            queries = [query] if tids is None else \
+                [f'({query}) and (' + ' or '.join(f'thread:{t}' for t in tids[i:i + 100]) + ')'
+                 for i in range(0, len(tids), 100)]
+            seen = []
+            for q in queries:
+                seen += list(db.threads(q, sort=notmuch2.Database.SORT.NEWEST_FIRST))
+            for t in sorted(seen, key=lambda t: -t.last) if tids is not None else seen:
                 msgs = [message(m) for m in t.toplevel()]
                 data = dict(tid=t.threadid, subject=t.subject or '(no subject)', date=t.last,
                             authors=t.authors or '', messages=msgs, count=count(msgs),
                             unread=any_of(msgs, 'unread'), flagged=any_of(msgs, 'flagged'))
-                # A thread of one message is that message: nothing to open.
-                out.append(fc.Node(f'{node.path}{SEP}{t.threadid}', data['subject'], data['count'] > 1,
-                                   node, 'thread', data=data))
+                out.append(fc.Node(f'{node.path}{SEP}{t.threadid}', data['subject'], True, node, 'thread', data=data))
         return out
+
+    def contents(self, node, m):
+        """What a message says, as branches beside it: its subject, who it's from and to, when, its
+        body (the first part of a long one: Enter on '↓ more' shows more), and what's attached."""
+        got = self.parse(m['path'])
+        base, out = node.path + SEP, []
+
+        def add(kind, key, label, data=None):
+            out.append(fc.Node(base + key, label, False, node, kind, data=data))
+        add('subject', 'subject', got['subject'] or '(no subject)')
+        people = [('from', p) for p in got['from']] + [('to', p) for p in got['to'][:6]] + \
+                 [('cc', p) for p in got['cc'][:4]]
+        for i, (role, (name, addr)) in enumerate(people):
+            add('person', f'p{i}', name or addr, dict(role=role, address=addr))
+        hidden = max(0, len(got['to']) - 6) + max(0, len(got['cc']) - 4)
+        if hidden:
+            add('person', 'p+', f'and {hidden} more', dict(role='', address=''))
+        add('when', 'when', got['date'])
+        shown = self.lines.get(m['path'], BODY_LINES)
+        lines, paragraph, n = got['body'].split('\n'), [], 0
+        for line in lines[:shown] + ['']:
+            if line.strip():
+                paragraph.append(line.rstrip())
+            elif paragraph:
+                add('body', f'b{n}', '\n'.join(paragraph))
+                paragraph, n = [], n + 1
+        if len(lines) > shown:
+            add('more', 'more', f'↓ {len(lines) - shown} more lines', dict(path=m['path']))
+        for i, (name, size, path) in enumerate(got['files']):
+            add('attachment', f'a{i}', f'📎 {name}', dict(size=size, message=m['path'], index=i))
+        return out
+
+    def parse(self, path):
+        """A message file, read once: subject, from/to/cc as (name, address), date, body, files."""
+        if path in self.parsed:
+            return self.parsed[path]
+        try:
+            with open(path, 'rb') as f:
+                msg = email.message_from_binary_file(f, policy=email.policy.default)
+        except OSError as e:
+            got = dict(subject='', **{k: [] for k in ('from', 'to', 'cc')}, date='', files=[],
+                       body=f'({e.strerror or "unreadable"})')
+            return self.parsed.setdefault(path, got)
+        people = lambda h: [(n, a) for n, a in email.utils.getaddresses([msg[h] or '']) if a or n]
+        stamp = email.utils.parsedate_to_datetime(msg['Date']) if msg['Date'] else None
+        got = dict(subject=str(msg['Subject'] or ''), **{h.lower(): people(h) for h in ('From', 'To', 'Cc')},
+                   date=stamp.astimezone().strftime('%a %-d %b %Y, %H:%M') if stamp else '',
+                   body=body_text(msg),
+                   files=[(a.get_filename() or a.get_content_type(), len(a.get_payload(decode=True) or b''), path)
+                          for a in msg.iter_attachments()])
+        self.parsed[path] = got
+        return got
 
     def draft_node(self, path, parent):
         headers, attach, _ = compose.parse(path)
@@ -259,7 +410,7 @@ class Mail(fc.Provider):
 
     def message_node(self, m, parent):
         return fc.Node(f'{parent.path}{SEP}{m["mid"]}', f'{m["author"]} · {when(m["date"])}',
-                       bool(m['replies']), parent, 'message', data=m)
+                       True, parent, 'message', data=m)
 
     def locate(self, start):
         """`account` or `account/folder`."""
@@ -273,21 +424,50 @@ class Mail(fc.Provider):
 
     # -- how it looks
     def label(self, node):
-        d = node.data
-        if node.kind == 'folder' and d['unread']:
-            return f'{node.name} {d["unread"]}'
-        if node.kind == 'thread' and d['count'] > 1:
-            return f'{node.name} ({d["count"]})'
         if node.kind == 'drafts':
-            return f'{node.name} {d["count"]}'
+            return f'{node.name} {node.data["count"]}'
         return node.name
+
+    def count(self, node):
+        """Numbers in a column: a folder's unread, a group's threads, a thread's messages; beside
+        a person, their address."""
+        k, d = node.kind, node.data
+        if k == 'folder':
+            return (f'{d["unread"]:,}', 'git_dirty', True) if d['unread'] else None
+        if k == 'group':
+            return f'{len(d["tids"]):,}', 'stub', False
+        if k == 'thread' and d['count'] > 1:
+            return str(d['count']), 'stub', False
+        if k == 'person' and d['address']:
+            return f'{d["role"]}  {d["address"]}', 'stub', False
+        if k == 'attachment':
+            return f'{d["size"] / 1024:,.0f} KB', 'stub', False
+        return None
 
     def unread(self, node):
         d = node.data
         return bool(d and node.kind in ('folder', 'thread', 'message') and d['unread'])
 
     def colour(self, node):
-        return (('dir' if node.is_dir else 'file'), True) if self.unread(node) else None
+        k = node.kind
+        if k == 'subject':
+            return 'path', True
+        if k in ('when', 'more'):
+            return 'stub', False
+        if k == 'group' and node.data['unread']:
+            return 'dir', True
+        return ('dir', True) if self.unread(node) else None
+
+    def chip(self, node):
+        """People in their colours, as in chats: their own, from their address."""
+        if node.kind == 'person' and node.data['address']:
+            if node.data['address'].lower() in {a.address.lower() for a in self.accounts}:
+                return 'home_fg', 'home_bg'                     # you
+            return 'person_fg', f'person{zlib.crc32(node.data["address"].lower().encode()) % fc.PEOPLE}'
+        return None
+
+    def width(self, node):
+        return BODY_WIDTH if node.kind == 'body' else None
 
     def mark(self, node):
         if node.kind in ('thread', 'message'):
@@ -295,15 +475,25 @@ class Mail(fc.Provider):
                 return 'git_dirty', '●', '*'
             if node.data['flagged']:
                 return 'git_staged', '★', '!'
+        if node.kind == 'group' and node.data['unread']:
+            return 'git_dirty', '●', '*'
         return None
+
+    def mark_before(self, node):
+        return node.kind in ('group', 'thread', 'message')     # unread, before the subject, as tuido's states
 
     def dim(self, node):
         return 0.8 if node.kind == 'folder' and not node.data['total'] else 1.0
 
+    def pane_for(self, node):
+        """The message is on the canvas: the pane only shows its pictures."""
+        path = self.message_path(node)
+        return bool(path and pictures(path))
+
     def bar(self, node, plain):
         names, n = [], node     # names, not labels: no counts or dates
         while n.parent:
-            names.append(n.data['author'] if n.kind == 'message' else n.name); n = n.parent
+            names.append(n.data['author'] if n.kind == 'message' else n.name.split('\n')[0][:40]); n = n.parent
         names.reverse()
         segs = [('mail', 'home_fg', 'home_bg', False)] + [
             (t, 'cwd_fg' if i == len(names) - 1 else 'seg_fg', 'seg_bg', i == len(names) - 1)
@@ -317,41 +507,30 @@ class Mail(fc.Provider):
             tail.append((f'{d["unread"]} unread' if d['unread'] else f'{d["total"]} messages',
                          'repo_dirty_fg' if d['unread'] else 'repo_clean_fg',
                          'repo_dirty_bg' if d['unread'] else 'repo_clean_bg', False))
+        if node.kind in ('folder', 'group'):
+            tail.append((f'by {self.grouping}' if self.grouping != 'all' else 'not grouped', 'bg', 'filter', False))
         return segs, tail
 
-    # -- the reading pane
+    # -- the pane: a message's pictures
     def preview(self, node):
-        d = node.data
-        if node.kind == 'account':
-            return f'{d.address}\n{d.type}, {d.imap_host}\n\n{d.maildir}'
-        if node.kind == 'folder':
-            return f'{d["total"]:,} messages, {d["unread"]:,} unread'
-        if node.kind == 'thread' and d['count'] == 1:
-            return [read(d['messages'][0]['path'])] + pictures(d['messages'][0]['path'])
-        if node.kind == 'thread':
-            lines = [f'{d["count"]} messages, {d["authors"]}', '']
-
-            def walk(msgs, depth):
-                for m in msgs:
-                    lines.append(f'{"  " * depth}{"●" if m["unread"] else "·"} {m["author"]}, {when(m["date"])}')
-                    walk(m['replies'], depth + 1)
-            walk(d['messages'], 0)
-            return '\n'.join(lines)
-        if node.kind == 'message':
-            return [read(d['path'])] + pictures(d['path'])
-        if node.kind == 'drafts':
-            return f'{d["count"]} not sent yet: ⌃E goes on writing one, ⌃D throws it away'
-        if node.kind == 'draft':
-            with open(d['path']) as f:
-                return f.read()
-        return None
+        path = self.message_path(node)
+        return pictures(path) or None if path else None
 
     def choose(self, node):
-        return None      # a mail client stays open: Enter opens, Esc leaves
+        """Enter on '↓ more' shows more of a long message; elsewhere a branch opens."""
+        if node.kind == 'more':
+            self.lines[node.data['path']] = self.lines.get(node.data['path'], BODY_LINES) + MORE_LINES
+            self.invalidate(node.parent.path)
+            return fc.STAY
+        return None
 
     # -- writing, and what's attached
     def message_path(self, node):
-        """The file of the message `node` is (a thread of one is its message), or None."""
+        """The file of the message `node` is, or is part of (a thread of one is its message), or None."""
+        while node is not None and node.kind in ('subject', 'person', 'when', 'body', 'more', 'attachment'):
+            node = node.parent
+        if node is None:
+            return None
         if node.kind == 'message':
             return node.data['path']
         if node.kind == 'thread' and node.data['count'] == 1:
@@ -364,6 +543,11 @@ class Mail(fc.Provider):
         return node.data if node is not None else None
 
     def actions(self, node):
+        if node.kind in ('folder', 'group'):          # how the folder branches: by date, sender, or not
+            out = [('\x0e', 'new', '⌃N new'), ('\x0c', 'group', f'⌃L by {self.next_grouping()}')]
+            return out
+        if node.kind == 'attachment':
+            return [('\x0f', 'open-one', '⌃O open'), ('\x13', 'save-one', '⌃S save'), ('\x12', 'reply', '⌃R reply')]
         if node.kind in ('drafts',):
             return [('\x0e', 'new', '⌃N new')]
         if node.kind == 'draft':
@@ -375,7 +559,7 @@ class Mail(fc.Provider):
                     ('\x06', 'forward', '⌃F forward')]
             if attachments(path):
                 out += [('\x0f', 'open', '⌃O open attached'), ('\x13', 'save', '⌃S save attached')]
-        return out if node.kind in ('account', 'folder', 'thread', 'message') else []
+        return out if node.kind in ('account', 'thread', 'message', 'subject', 'person', 'when', 'body', 'more') else []
 
     def act(self, node, name, canvas):
         a = self.account_of(node)
@@ -397,12 +581,27 @@ class Mail(fc.Provider):
                     self.invalidate(node.parent.parent.path)
                     canvas.say('thrown away')
             canvas.ask('throw this draft away?  y yes  n no', done, choices='yn')
+        elif name == 'group':
+            self.grouping = self.next_grouping()
+            self.keep()
+            self.invalidate()
+            canvas.status('group', {'all': 'not grouped'}.get(self.grouping, f'grouped by {self.grouping}'), 'note')
+        elif name in ('open-one', 'save-one'):
+            f = extract(node.data['message'])[node.data['index']]
+            if name == 'open-one':
+                files.open_file(f)
+                canvas.say(f'opening {os.path.basename(f)}')
+            else:
+                canvas.say(f'saved to {files.copy_to(f, files.downloads())}')
         elif name == 'open':
             self.attached(canvas, path, lambda f: (files.open_file(f), canvas.say(f'opening {os.path.basename(f)}')))
         elif name == 'save':
             saved = [files.copy_to(f, files.downloads()) for f in extract(path)]
             canvas.say(f'saved {len(saved)} to {files.downloads()}' if saved else 'nothing attached')
         return None
+
+    def next_grouping(self):
+        return self.GROUPINGS[(self.GROUPINGS.index(self.grouping) + 1) % len(self.GROUPINGS)]
 
     def write(self, canvas, a, path):
         """Edit the draft in your editor, outside the canvas, then ask what to do with it."""

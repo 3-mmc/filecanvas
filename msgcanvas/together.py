@@ -59,6 +59,15 @@ class Together(fc.Provider):
             return node.data
         return self.ask('preview', node, None)
 
+    def mark_before(self, node):
+        return self.ask('mark_before', node, False)
+
+    def line(self, node):
+        return self.ask('line', node, None)
+
+    def count(self, node):
+        return self.ask('count', node, None)
+
     def width(self, node):
         return self.ask('width', node, None)
 
@@ -84,4 +93,4 @@ class Together(fc.Provider):
         return any(p.busy() for p in self.providers)
 
     def choose(self, node):
-        return None
+        return self.ask('choose', node, None)

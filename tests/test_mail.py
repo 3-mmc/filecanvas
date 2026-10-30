@@ -178,56 +178,105 @@ class Provider(unittest.TestCase):
         cls.accounts = [accounts.Account(dict(name='home', address='aaron@example.org', type='seznam'), defaults),
                         accounts.Account(dict(name='empty', address='e@example.org', type='seznam'), defaults)]
 
-    def canvas(self, start='home'):
-        return fc.Canvas(start, fc.options(provider=mail.Mail(self.accounts, watch=0), backdrop='off',
-                                           ease=1, glyphs='plain', colmax=40))
+    def canvas(self, start='home', grouping='all', peek=False):
+        return fc.Canvas(start, fc.options(provider=mail.Mail(self.accounts, watch=0, grouping=grouping), backdrop='off',
+                                           ease=1, glyphs='plain', colmax=40, peek=peek))
 
-    def screen(self, c, w=120, h=24):
+    def screen(self, c, w=140, h=30):
         return [ANSI.sub('', l).rstrip() for l in c.frame(w, h, animate=False)[0]]
 
     def press(self, c, *keys):
         for k in keys:
             self.assertIsNone(fc.apply(c, k, c.opts))
 
-    def test_folders_inbox_first_with_unread(self):
+    def test_folders_inbox_first_unread_in_a_column(self):
         c = self.canvas()
-        self.assertEqual([k.label() for k in c.focus.parent.shown()], ['Inbox 1', 'Sent', 'Archive'])
+        folders = c.focus.parent.shown()
+        self.assertEqual([k.label() for k in folders], ['Inbox', 'Sent', 'Archive'])
+        self.assertEqual([c.source.count(k) for k in folders], [('1', 'git_dirty', True), None, None])
         self.assertIn('1 unread', self.screen(c)[-2])
 
     def test_threads_newest_first_and_the_reply_tree(self):
         c = self.canvas('home/INBOX')
         threads = c.focus.parent.shown()
-        self.assertEqual([k.label() for k in threads], ['Your pass', 'Kiln quote (3)'])
-        self.assertFalse(threads[0].is_dir)                     # one message: nothing to open
+        self.assertEqual([k.label() for k in threads], ['Your pass', 'Kiln quote'])
+        self.assertEqual(c.source.count(threads[1]), ('3', 'stub', False))   # its messages, in the column
         self.assertEqual(c.source.mark(threads[1])[1], '●')     # Bo's reply is unread
         self.press(c, 'down', 'right')
         self.assertEqual(c.focus.label(), 'Ann Lee · 5 Oct')
-        self.press(c, 'right')
-        self.assertEqual(c.focus.label(), 'Bo · 6 Oct')
-        self.press(c, 'right')
-        self.assertEqual(c.focus.label(), 'Ann Lee · 7 Oct')
-        self.assertIn('Great.', '\n'.join(self.screen(c)))
+        replies = [k for k in c.focus.load() if k.kind == 'message']
+        self.assertEqual([k.label() for k in replies], ['Bo · 6 Oct'])
+        self.assertEqual([k.label() for k in replies[0].load() if k.kind == 'message'], ['Ann Lee · 7 Oct'])
 
-    def test_the_pane_reads_messages(self):
-        c = self.canvas('home/INBOX')
-        text = '\n'.join(self.screen(c))
-        self.assertIn('Expires 14 Nov.', text)                  # html, as text
-        self.assertNotIn('p{}', text)
-        self.press(c, 'down')
-        self.assertIn('3 messages', '\n'.join(self.screen(c)))  # a thread: who wrote, in order
+    def test_a_message_opens_onto_what_it_says(self):
+        c = self.canvas('home/INBOX')                           # Your pass: one message, an HTML one
+        parts = c.focus.load()
+        kinds = [k.kind for k in parts]
+        self.assertEqual(kinds[:3], ['subject', 'person', 'person'])
+        self.assertEqual(parts[0].label(), 'Your pass')
+        sender, to = parts[1], parts[2]
+        self.assertEqual((sender.label(), c.source.count(sender)[0]), ('Rail', 'from  no-reply@rail.cz'))
+        self.assertTrue(c.source.chip(sender)[1].startswith('person'))       # in their colour
+        self.assertEqual(c.source.chip(to), ('home_fg', 'home_bg'))         # you, in yours
+        body = [k.label() for k in parts if k.kind == 'body']
+        self.assertEqual(body, ['Expires 14 Nov.', 'Thanks'])            # html, as text, a paragraph each
+        self.assertFalse(c.source.pane_for(c.focus))            # no pictures: no pane
         c = self.canvas('home/Archive')
-        self.assertIn('📎 form.pdf', '\n'.join(self.screen(c)))
+        files = [k for k in c.focus.load() if k.kind == 'attachment']
+        self.assertEqual([k.label() for k in files], ['📎 form.pdf'])
+        self.assertEqual(c.source.count(files[0])[0], '0 KB')
+
+    def test_a_long_body_shows_its_start_and_more_on_enter(self):
+        long = '\n\n'.join(f'paragraph {i}' for i in range(100))
+        deliver('home/INBOX', 'm-long', 'From: Di <di@x.org>\nTo: aaron@example.org\nSubject: Newsletter\n'
+                'Date: Thu, 01 Oct 2026 09:00:00 +0000\nMessage-ID: <long@x>\n\n' + long + '\n', seen=True)
+        subprocess.run(['notmuch', 'new', '--quiet'], check=True)
+        self.addCleanup(lambda: (os.remove(os.path.join(MAILDIR, 'home', 'INBOX', 'cur', 'm-long:2,S')),
+                                 subprocess.run(['notmuch', 'new', '--quiet'])))
+        c = self.canvas('home/INBOX')
+        news = next(k for k in c.focus.parent.shown() if k.label() == 'Newsletter')
+        more = [k for k in news.load() if k.kind == 'more']
+        bodies = [k for k in news.load() if k.kind == 'body']
+        self.assertEqual((len(bodies), more[0].label()), (20, '↓ 159 more lines'))
+        self.assertIs(c.source.choose(more[0]), fc.STAY)
+        self.screen(c)
+        self.assertEqual(len([k for k in news.load() if k.kind == 'body']), 60)
+
+    def test_inbox_by_date_by_sender_or_not_and_l_switches(self):
+        c = self.canvas('home/INBOX', grouping='date')
+        groups = c.focus.parent.shown()
+        self.assertTrue(all(k.kind == 'group' for k in groups))
+        self.assertEqual(sum(len(k.data['tids']) for k in groups), 2)    # each thread in one group
+        self.assertEqual(c.source.count(groups[0])[1], 'stub')
+        threads = groups[0].load()
+        self.assertTrue(threads and all(k.kind == 'thread' for k in threads))
+        self.assertIn('by date', self.screen(c)[-2])
+        self.press(c, '\x0c')                                   # ⌃L: by sender
+        self.screen(c)
+        self.assertEqual(sorted(k.label() for k in c.focus.parent.shown() if k.kind == 'group'), ['Ann Lee', 'Rail'])
+        self.press(c, '\x0c')                                   # ⌃L: not grouped
+        self.screen(c)
+        self.assertEqual([k.kind for k in c.focus.parent.load()][:2], ['thread', 'thread'])
+
+    def test_the_grouping_is_remembered(self):
+        kept = os.path.join(TMP, 'view.json')
+        p = mail.Mail(self.accounts, watch=0, remember=kept)
+        p.grouping = 'sender'
+        p.keep()
+        self.assertEqual(mail.Mail(self.accounts, watch=0, remember=kept).grouping, 'sender')
 
     def test_enter_stays_and_an_empty_account_says_so(self):
         c = self.canvas('home/INBOX')
-        self.press(c, '\r', 'down', '\r')
-        self.assertEqual(c.focus.kind, 'message')
+        self.press(c, '\r')                                     # a thread of one: onto what it says
+        self.assertEqual(c.focus.kind, 'subject')
+        self.press(c, 'down', '\r')                             # Enter on its sender: nothing, it stays
+        self.assertEqual(c.focus.kind, 'person')
         c = self.canvas('')
         self.press(c, 'down', 'right')
         self.assertIn('(no mail yet', '\n'.join(self.screen(c)))
 
     def test_new_mail_appears(self):
-        p = mail.Mail(self.accounts, watch=0.05)
+        p = mail.Mail(self.accounts, watch=0.05, grouping='all')
         c = fc.Canvas('home/INBOX', fc.options(provider=p, backdrop='off', ease=1, colmax=40))
         time.sleep(0.2)
         deliver('home/INBOX', 'm9', letter('n9@x', 'Cy <cy@x.org>', 'Fresh', 'Fri, 09 Oct 2026 08:00:00 +0000', 'new'))
@@ -324,6 +373,18 @@ class Helpers(unittest.TestCase):
         self.assertEqual(mail.when(now - 3600, now), '11:00')
         self.assertEqual(mail.when(time.mktime((2026, 3, 2, 9, 0, 0, 0, 0, -1)), now), '2 Mar')
         self.assertEqual(mail.when(time.mktime((2024, 3, 2, 9, 0, 0, 0, 0, -1)), now), '2 Mar 2024')
+
+    def test_date_groups(self):
+        now = time.mktime((2026, 10, 30, 12, 0, 0, 0, 0, -1))           # a Friday
+        at = lambda *d: time.mktime((*d, 0, 0, -1))
+        self.assertEqual(mail.when_group(at(2026, 10, 30, 9, 0, 0), now), 'Today')
+        self.assertEqual(mail.when_group(at(2026, 10, 29, 23, 0, 0), now), 'Yesterday')
+        self.assertEqual(mail.when_group(at(2026, 10, 26, 9, 0, 0), now), 'This week')
+        self.assertEqual(mail.when_group(at(2026, 10, 20, 9, 0, 0), now), 'Last week')
+        self.assertEqual(mail.when_group(at(2026, 10, 3, 9, 0, 0), now), 'Earlier this month')
+        self.assertEqual(mail.when_group(at(2026, 3, 3, 9, 0, 0), now), 'March')
+        self.assertEqual(mail.when_group(at(2024, 3, 3, 9, 0, 0), now), '2024')
+        self.assertEqual(mail.first_author('Ann Lee, Bo| Cy'), 'Ann Lee')
 
     def test_names_and_folders(self):
         self.assertEqual(mail.who('"Lee, Ann" <ann@x.org>'), 'Lee, Ann')

@@ -137,7 +137,7 @@ class OnTheCanvas(unittest.TestCase):
         self.addCleanup(setattr, files, 'open_file', self.real_open)
 
     def canvas(self, start='home/INBOX'):
-        p = mail.Mail([account()], watch=0, pick=lambda start: os.path.join(tm.TMP, 'plan.pdf'))
+        p = mail.Mail([account()], watch=0, pick=lambda start: os.path.join(tm.TMP, 'plan.pdf'), grouping='all')
         return fc.Canvas(start, fc.options(provider=p, backdrop='off', ease=1, glyphs='plain', colmax=40))
 
     def press(self, c, *keys):
@@ -215,10 +215,11 @@ class Pictures(unittest.TestCase):
             f.write(m.as_bytes())
         p = mail.Mail([account()], watch=0)
         node = fc.Node('/x', 'photos', False, None, 'message', source=p, data=dict(path=path))
-        shown = p.preview(node)
-        self.assertIn('two pictures', shown[0])
-        self.assertEqual([x.name for x in shown[1:]], ['kiln.png'])
-        with open(shown[1].path, 'rb') as f:
+        shown = p.preview(node)                         # the pane: the pictures (the text is on the canvas)
+        self.assertTrue(p.pane_for(node))
+        self.assertEqual([x.name for x in shown], ['kiln.png'])
+        self.assertIn('two pictures', p.parse(path)['body'])
+        with open(shown[0].path, 'rb') as f:
             self.assertEqual(f.read(), self.PNG)
 
     def test_a_photo_message_fetches_its_picture_then_shows_it(self):

@@ -1,8 +1,13 @@
 # msgcanvas
 
-Mail and chat on one canvas you move across: accounts branch into folders, folders into
-threads (newest first), threads into who replied to whom, and the message you're on is open in a
-reading pane beside them. Drawn by [treecanvas](https://github.com/3-mmc/treecanvas) through its
+Mail and chat on one canvas you move across: accounts branch into folders (their unread counts
+in a column of their own), folders into groups (by date: Today, Yesterday, This week, Last week,
+Earlier this month, each month, each year; or by sender; or none: **⌃L** switches, and it's
+remembered), groups into threads, threads into who replied to whom. The message you're on opens
+onto what it says, on the canvas: its subject, who it's from and to (each in their colour, their
+address beside), when, its body a paragraph at a time (a long one's start, then **↓ more**), and
+what's attached. Pictures show in a pane beside.
+Drawn by [treecanvas](https://github.com/3-mmc/treecanvas) through its
 providers, vendored here (`tools/vendor-treecanvas.py`).
 
 Mail is synced by mbsync into `~/Mail/<account>/`, indexed by notmuch and sent by msmtp. Syncing

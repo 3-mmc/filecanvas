@@ -316,6 +316,20 @@ class TogetherPassesActionsOn(unittest.TestCase):
         self.assertIn('new on home', screen(c)[-2])
 
 
+class TogetherPassesEnterOn(unittest.TestCase):
+    def test_enter_reaches_the_nodes_own_provider(self):
+        class Earlier(Mailish):
+            chosen = []
+
+            def choose(self, node):
+                self.chosen.append(node.name)
+                return fc.STAY
+        both = together.Together([Earlier({})])
+        c = fc.Canvas('', options(both))
+        press(c, '\r')
+        self.assertEqual(Earlier.chosen, ['home'])             # Together used to say None for everyone
+
+
 class Mailish(fc.Tree):
     """Stands in for the mail provider: one account."""
     KINDS = ('account',)
