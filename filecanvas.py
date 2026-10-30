@@ -253,6 +253,7 @@ PEOPLE = 6      # person0 … person5 in every theme
 PULSE = 0.9         # seconds a row's flash takes to fade back
 SHOWN_OK = 3.0      # how long ✓ stays
 SHOWN_FAILED = 8.0  # and ✗
+SHOWN_NOTE = 5.0    # and a notice
 DISSOLVE = 0.8      # what's gone turning to dust
 REVEAL = 0.45       # new lines at the end of a following pane resolving out of noise
 SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
@@ -609,8 +610,12 @@ class Provider:
 
     def status(self, key, text, state='busy'):
         """From any thread: a chip in the bar, one per `key`. 'busy' spins until the same key comes
-        back 'ok' (✓, gone after a few seconds), 'failed' (✗, for longer) or 'gone' (it dissolves)."""
+        back 'ok' (✓, gone after a few seconds), 'failed' (✗, for longer) or 'gone' (it dissolves);
+        'note' is a notice that stays a few seconds."""
         self.signal(('status', key, text, state))
+
+    def focus(self, node):
+        """The canvas's choice has moved to `node` (told once per move): where you're looking."""
 
     def signal(self, what):
         with STALE:
@@ -893,6 +898,7 @@ class Canvas:
         self.statuses = {}                  # key: (text, state, since): chips in the bar
         self.reveal = None                  # (node, first new line, since) in a following pane
         self.animate = True                 # the frame being drawn moves (not calm)
+        self.told = None                    # the focus the provider was last told of
         self.message = None                 # what say() said, until the next key
         self.waiting = []                   # what outside() was given, to run with the terminal
 
@@ -919,7 +925,7 @@ class Canvas:
     def in_motion(self, now):
         """Forget motion that's over; whether any is left (the frame after this must be drawn too)."""
         self.pulses = {k: t for k, t in self.pulses.items() if now - t < PULSE}
-        last = {'ok': SHOWN_OK, 'failed': SHOWN_FAILED, 'gone': DISSOLVE}
+        last = {'ok': SHOWN_OK, 'failed': SHOWN_FAILED, 'gone': DISSOLVE, 'note': SHOWN_NOTE}
         self.statuses = {k: v for k, v in self.statuses.items() if v[1] not in last or now - v[2] < last[v[1]]}
         if self.reveal and now - self.reveal[2] >= REVEAL:
             self.reveal = None
@@ -1058,6 +1064,9 @@ class Canvas:
         self.refresh()
         now, self.animate = self.clock(), animate
         moving_parts = self.in_motion(now)
+        if self.focus is not self.told and not isinstance(self.focus, Stub):
+            self.told = self.focus
+            self.source.focus(self.focus)
         full = w            # the tree gets what the reading pane leaves
         pane_w = int(w * o.pane_width) if self.pane and w >= 60 else 0
         w -= pane_w
@@ -1340,6 +1349,8 @@ class Canvas:
                 tail.append(('✓ ' + text, 'repo_clean_fg', 'repo_clean_bg', False))
             elif state == 'failed':
                 tail.append(('✗ ' + text, 'repo_dirty_fg', 'repo_dirty_bg', True))
+            elif state == 'note':
+                tail.append((text, 'bg', 'filter', False))
             elif state == 'gone' and self.animate:
                 tail.append((dust(text, (now - since) / DISSOLVE, hash(key) % 97), 'bg', 'filter', False))
 

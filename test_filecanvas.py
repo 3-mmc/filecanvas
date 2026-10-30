@@ -388,6 +388,22 @@ class Motion(unittest.TestCase):
         c.now += 0.5
         self.assertEqual(self.frame(c, animate=False)[0], lines)
 
+    def test_notes_stay_a_while_and_the_provider_hears_where_you_look(self):
+        seen = []
+
+        class Watch(Live):
+            def focus(self, node):
+                seen.append(node.path)
+        c = self.canvas(provider=Watch({'a': 1, 'b': 2}))
+        c.status('n', 'Ann: hello', 'note')
+        self.assertIn('Ann: hello', self.frame(c)[1][-2])
+        press(c, 'down')
+        self.frame(c)
+        self.frame(c)
+        self.assertEqual(seen, ['/a', '/b'])                       # once per move
+        c.now += fc.SHOWN_NOTE
+        self.assertNotIn('Ann: hello', self.frame(c)[1][-2])
+
     def test_changed_hears_each_edit_and_the_close(self):
         heard = []
         c = self.canvas()
