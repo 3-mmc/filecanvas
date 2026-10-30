@@ -473,6 +473,32 @@ class TallNodes(unittest.TestCase):
         press(c, 'left', 'right')
         self.assertEqual(c.focus.name, 'm3')                        # back in: where you were
 
+    def test_going_into_something_still_coming_goes_in_when_it_comes(self):
+        class Slow(Live):
+            ready = False
+
+            def children(self, node):
+                if node.name == 'chat' and not self.ready:
+                    raise OSError(0, 'fetching…')
+                return super().children(node)
+        p = Slow({'chat': {'a': 1, 'b': 2}, 'other': 1})
+        c = fc.Canvas('', options(provider=p))
+        press(c, 'right')
+        self.assertEqual((c.focus.name, c.focus.error), ('chat', 'fetching…'))
+        p.ready = True
+        p.invalidate('/chat')
+        c.frame(100, 16, animate=False)
+        self.assertEqual(c.focus.name, 'a')                         # in, once it came
+        press(c, 'left')
+        p.ready = False
+        c.source.invalidate('/chat')
+        c.frame(100, 16, animate=False)
+        press(c, 'down', 'up')                                      # moved off and back: no surprise jump
+        p.ready = True
+        p.invalidate('/chat')
+        c.frame(100, 16, animate=False)
+        self.assertEqual(c.focus.name, 'chat')
+
     def test_the_pane_shows_only_where_it_should(self):
         c = fc.Canvas('', options(provider=Conversation({'photo': 1, 'text': 2})))
         self.assertIn('│', ''.join(screen(c)))

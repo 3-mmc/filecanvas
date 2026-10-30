@@ -928,6 +928,7 @@ class Canvas:
         self.reveal = None                  # (node, first new line, since) in a following pane
         self.animate = True                 # the frame being drawn moves (not calm)
         self.told = None                    # the focus the provider was last told of
+        self.going_in = None                # a node → was pressed on while its children were coming
         self.message = None                 # what say() said, until the next key
         self.waiting = []                   # what outside() was given, to run with the terminal
 
@@ -999,6 +1000,11 @@ class Canvas:
         self.reattach()
         if follow and self.focus.parent is p and p.shown():
             p.sel, self.focus = len(p.shown()) - 1, p.shown()[-1]
+        if self.going_in is not None:
+            if self.going_in is self.focus and self.focus.shown():
+                self.enter()
+            elif self.going_in is not self.focus:
+                self.going_in = None
 
     def reload(self, node):
         old = {k.path: k for k in node.kids}
@@ -1049,6 +1055,8 @@ class Canvas:
             return
         f.open = True
         kids = f.shown()
+        # still coming (its children raised: 'fetching…'): go in once they're here, if you're still on it
+        self.going_in = f if not kids and f.error else None
         if kids:
             if not f.entered:
                 f.entered = True
