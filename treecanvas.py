@@ -1042,6 +1042,23 @@ class Canvas:
             p.sel = p.shown().index(self.focus)
 
     # -- moving
+    def go(self, ids):
+        """Choose the node at the end of `ids` (the ids from below the root down to it), opening the
+        way there as a link would, a filter in the way cleared. False if it isn't there."""
+        node = self.root
+        for want in ids:
+            hit = next((k for k in node.load() if k.path == want), None)
+            if hit is None:
+                return False
+            node.open = node.entered = True
+            if not any(k is hit for k in node.shown()):
+                node.filter = ''
+            shown = node.shown()
+            node.sel = next((i for i, k in enumerate(shown) if k is hit), 0)
+            node = hit
+        self.focus = node
+        return True
+
     def siblings(self):
         p = self.focus.parent
         return p.shown() if p else [self.focus]

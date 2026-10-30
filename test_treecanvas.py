@@ -505,6 +505,20 @@ class TallNodes(unittest.TestCase):
         press(c, 'down')
         self.assertNotIn('│ ', ''.join(screen(c)))
 
+
+class Going(unittest.TestCase):
+    def test_go_opens_the_way_and_chooses_it(self):
+        c = fc.Canvas('', options(provider=fc.Tree({'a': {'b': {'c': 1, 'd': 2}}, 'z': 1})))
+        press(c, 'down', 'z')                                       # elsewhere, and a filter in the way
+        self.assertTrue(c.go(['/a', '/a/b', '/a/b/d']))
+        self.assertEqual(c.focus.path, '/a/b/d')
+        self.assertTrue(c.root.kids[0].open and c.root.kids[0].kids[0].open)
+        self.assertEqual(c.root.filter, '')
+        press(c, 'left', 'right')
+        self.assertEqual(c.focus.path, '/a/b/d')                    # going back in lands where it went
+        self.assertFalse(c.go(['/a', '/nowhere']))
+        self.assertEqual(c.focus.path, '/a/b/d')
+
 class Wrap(unittest.TestCase):
     def test_breaks_at_spaces_and_cuts_long_words(self):
         self.assertEqual(fc.wrap('the quick brown fox', 10), ['the quick', 'brown fox'])
