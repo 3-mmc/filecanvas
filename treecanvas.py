@@ -22,7 +22,7 @@ Settings are flags (--help), and any of them can live in ~/.config/treecanvas/co
 The file system is one provider of the tree (FileSystem); anything else can be another
 (Provider, and Tree for nested dicts): `pick(provider=...)`.
 """
-import argparse, json, os, re, select, shutil, stat, subprocess, sys, threading, time, unicodedata
+import argparse, functools, json, os, re, select, shutil, stat, subprocess, sys, threading, time, unicodedata
 from concurrent.futures import ThreadPoolExecutor
 
 CONFIG = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'),
@@ -146,8 +146,9 @@ def rgb(c):
     return (8 + 10 * (c - 232),) * 3
 
 
+@functools.lru_cache(maxsize=4096)
 def nearest(t):
-    """The 256-colour number closest to an RGB triple."""
+    """The 256-colour number closest to an RGB triple (remembered: a frame asks for the same few)."""
     def d(a):
         return sum((x - y) ** 2 for x, y in zip(a, t))
     cube = [min(range(6), key=lambda i: abs(LEVELS[i] - v)) for v in t]
@@ -160,8 +161,15 @@ class Paint:
     def __init__(self, theme, truecolor):
         self.t, self.true = theme, truecolor
         self.bg = rgb(theme['bg'])
+        self.codes = {}         # (colour, strength, ground): its escape, worked out once
 
     def code(self, c, s, ground):
+        key = (c, s, ground)
+        if key not in self.codes:
+            self.codes[key] = self.work_out(c, s, ground)
+        return self.codes[key]
+
+    def work_out(self, c, s, ground):
         c = self.t.get(c, c) if isinstance(c, str) and not c.startswith('#') else c
         if s >= 0.999 and isinstance(c, int):
             return f'{ground};5;{c}'     # the exact palette colour, as `ls` would show it
@@ -177,6 +185,8 @@ class Paint:
 
 def cells(text):
     """How many columns `text` takes on a terminal: CJK and the like take two, accents none."""
+    if text.isascii():                  # most text: as wide as it is long
+        return len(text)
     return sum(0 if unicodedata.combining(c) else 2 if unicodedata.east_asian_width(c) in 'WF' else 1
                for c in text)
 
