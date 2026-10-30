@@ -308,6 +308,95 @@ class People(unittest.TestCase):
                 a, b = sorted((lum(t['person_fg']), lum(t[f'person{i}'])), reverse=True)
                 self.assertGreaterEqual((a + 0.05) / (b + 0.05), 4.5, f'{name} person{i}')
 
+
+class Motion(unittest.TestCase):
+    """With a clock the test turns."""
+    def canvas(self, data=None, provider=None):
+        c = fc.Canvas('', options(provider=provider or Live(data or {'a': 'one', 'b': 'two'})))
+        c.now = 100.0
+        c.clock = lambda: c.now
+        return c
+
+    def frame(self, c, animate=True, w=100, h=12):
+        lines, moving = c.frame(w, h, animate=animate)
+        return lines, [ANSI.sub('', l).rstrip() for l in lines], moving
+
+    def test_a_pulse_flashes_the_row_then_settles(self):
+        c = self.canvas()
+        settled = self.frame(c)[0]
+        c.source.pulse('/b')
+        flash, _, moving = self.frame(c)
+        self.assertTrue(moving)
+        self.assertNotEqual(flash, settled)
+        self.assertIn(c.paint.fg(fc.blend(c.theme['sel_bg'], c.theme['sel_bg'], 0), 1, True) + 'b', ''.join(flash))
+        c.now += fc.PULSE
+        again, _, moving = self.frame(c)
+        self.assertEqual((again, moving), (settled, False))
+
+    def test_status_chips_spin_tick_and_go(self):
+        c = self.canvas()
+        t = threading.Thread(target=c.source.status, args=('send', 'sending'))
+        t.start(); t.join()
+        _, text, moving = self.frame(c)
+        self.assertTrue(moving and fc.SPIN[0] + ' sending' in text[-2])
+        c.now += 0.1
+        self.assertIn(fc.SPIN[1] + ' sending', self.frame(c)[1][-2])
+        c.source.status('send', 'sent', 'ok')
+        self.assertIn('✓ sent', self.frame(c)[1][-2])
+        c.now += fc.SHOWN_OK
+        self.assertNotIn('sent', self.frame(c)[1][-2])
+        c.status('send', 'not sent', 'failed')
+        self.assertIn('✗ not sent', self.frame(c)[1][-2])
+        c.now += fc.SHOWN_OK
+        self.assertIn('✗ not sent', self.frame(c)[1][-2])          # failures stay longer
+
+    def test_what_is_gone_turns_to_dust(self):
+        c = self.canvas()
+        c.status('d', 'thrown away', 'gone')
+        self.assertIn('thrown away', self.frame(c)[1][-2])
+        c.now += fc.DISSOLVE * 0.5
+        middle = self.frame(c)[1][-2]
+        self.assertNotIn('thrown away', middle)
+        self.assertTrue(any(ch in middle for ch in fc.DUST[:3]))
+        c.now += fc.DISSOLVE
+        self.frame(c)
+        self.assertFalse(c.statuses)
+
+    def test_new_lines_at_the_end_resolve_out_of_noise(self):
+        class Talk(Live):
+            def preview_end(self, node):
+                return True
+        data = {'chat': '\n'.join(f'line {i}' for i in range(5))}
+        c = self.canvas(provider=Talk(data))
+        self.frame(c)
+        data['chat'] += '\nhello there'
+        c.source.invalidate()
+        _, text, moving = self.frame(c)
+        self.assertTrue(moving)
+        self.assertFalse(any(l.endswith('hello there') for l in text))      # noise at first
+        self.assertTrue(any(l.endswith('line 4') for l in text))            # the old lines don't move
+        self.assertTrue(any(l.endswith('│ ' + fc.scramble('hello there', 1, 5)) for l in text))
+        c.now += fc.REVEAL
+        self.assertTrue(any(l.endswith('hello there') for l in self.frame(c)[1]))
+
+    def test_calm_frames_hold_still(self):
+        c = self.canvas()
+        c.source.pulse('/b')
+        c.status('s', 'sending')
+        lines, text, _ = self.frame(c, animate=False)
+        self.assertIn('… sending', text[-2])
+        c.now += 0.5
+        self.assertEqual(self.frame(c, animate=False)[0], lines)
+
+    def test_changed_hears_each_edit_and_the_close(self):
+        heard = []
+        c = self.canvas()
+        c.ask('say', lambda t: None, changed=heard.append)
+        press(c, 'h', 'i', '\x7f', '\r')
+        c.ask('say', lambda t: None, changed=heard.append)
+        press(c, 'x', 'esc')
+        self.assertEqual(heard, ['h', 'hi', 'h', None, 'x', None])
+
 class Wrap(unittest.TestCase):
     def test_breaks_at_spaces_and_cuts_long_words(self):
         self.assertEqual(fc.wrap('the quick brown fox', 10), ['the quick', 'brown fox'])

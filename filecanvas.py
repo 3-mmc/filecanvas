@@ -21,7 +21,7 @@ Settings are flags (--help), and any of them can live in ~/.config/filecanvas/co
 The file system is one provider of the tree (FileSystem); anything else can be another
 (Provider, and Tree for nested dicts): `pick(provider=...)`.
 """
-import argparse, json, os, re, select, shutil, stat, subprocess, sys, threading, unicodedata
+import argparse, json, os, re, select, shutil, stat, subprocess, sys, threading, time, unicodedata
 from concurrent.futures import ThreadPoolExecutor
 
 CONFIG = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'),
@@ -248,6 +248,55 @@ def ls_colors():
 # -- pictures in the pane
 
 PEOPLE = 6      # person0 … person5 in every theme
+
+# -- motion: short, and none at all when calm (CDECK_CALM, or a frame drawn without animate)
+PULSE = 0.9         # seconds a row's flash takes to fade back
+SHOWN_OK = 3.0      # how long ✓ stays
+SHOWN_FAILED = 8.0  # and ✗
+DISSOLVE = 0.8      # what's gone turning to dust
+REVEAL = 0.45       # new lines at the end of a following pane resolving out of noise
+SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+NOISE = '░▒▓<>/\\|_-=+*#%&$@01'     # cdeck's
+DUST = '▓▒░· '
+SGR_RE = re.compile(r'\x1b\[[0-9;]*m')
+
+
+def chance(seed, i):
+    """A steady 0..1 for character i: the same each frame, so noise settles rather than flickers."""
+    return ((i * 7919 + seed * 104729) % 1009) / 1009
+
+
+def scramble(line, amount, seed=0):
+    """`line` (it may have colours) with about `amount` of its characters still noise."""
+    out, i = [], 0
+    for piece in re.split(r'(\x1b\[[0-9;]*m)', line):
+        if SGR_RE.fullmatch(piece):
+            out.append(piece)
+            continue
+        for ch in piece:
+            if ch != ' ' and cells(ch) == 1 and chance(seed, i) < amount:
+                ch = NOISE[int(chance(seed + 1, i) * len(NOISE))]
+            out.append(ch)
+            i += 1
+    return ''.join(out)
+
+
+def dust(text, amount, seed=0):
+    """`text` turning to dust: by `amount` 1 it's spaces."""
+    out = []
+    for i, ch in enumerate(text):
+        r = chance(seed, i) * 0.6
+        if amount > r and ch != ' ':
+            stage = min(len(DUST) - 1, int((amount - r) / 0.4 * len(DUST)))
+            ch = DUST[stage] if cells(ch) == 1 else ' ' * cells(ch)
+        out.append(ch)
+    return ''.join(out)
+
+
+def blend(a, b, t):
+    """From colour a to colour b (RGB), t from 0 to 1."""
+    a, b = rgb(a), rgb(b)
+    return tuple(round(x + (y - x) * t) for x, y in zip(a, b))
 
 
 class Chips:
@@ -554,6 +603,25 @@ class Provider:
         with STALE:
             return self.__dict__.pop('_stale', set())
 
+    def pulse(self, path):
+        """From any thread: the row of the node with id `path` flashes once (something arrived)."""
+        self.signal(('pulse', path))
+
+    def status(self, key, text, state='busy'):
+        """From any thread: a chip in the bar, one per `key`. 'busy' spins until the same key comes
+        back 'ok' (✓, gone after a few seconds), 'failed' (✗, for longer) or 'gone' (it dissolves)."""
+        self.signal(('status', key, text, state))
+
+    def signal(self, what):
+        with STALE:
+            self.__dict__.setdefault('_signals', []).append(what)
+        self.changed = True
+
+    def signals(self):
+        """What pulse() and status() were given since last asked."""
+        with STALE:
+            return self.__dict__.pop('_signals', [])
+
     def busy(self):
         return False
 
@@ -819,16 +887,43 @@ class Canvas:
         self.page = 10                      # and how many it shows
         self._preview = (None, 0, None)     # (node, width, its lines) last shown there
         self._at_end = False                # the pane showed its last line
-        self.asking = None                  # (prompt, text, done, choices): the typing line, open
+        self.asking = None                  # (prompt, text, done, choices, changed): the typing line, open
+        self.clock = time.monotonic         # for motion (tests set their own)
+        self.pulses = {}                    # node id: when its row began to flash
+        self.statuses = {}                  # key: (text, state, since): chips in the bar
+        self.reveal = None                  # (node, first new line, since) in a following pane
+        self.animate = True                 # the frame being drawn moves (not calm)
         self.message = None                 # what say() said, until the next key
         self.waiting = []                   # what outside() was given, to run with the terminal
 
     # -- for actions
-    def ask(self, prompt, done, text='', choices=None):
+    def ask(self, prompt, done, text='', choices=None, changed=None):
         """Open the typing line along the bottom: Enter calls done(text), Esc closes it. With
         `choices` (letters, 'yne'), one of those keys answers at once: done(letter). What done()
-        returns ends the canvas unless it's None; it may ask again."""
-        self.asking = (prompt, text, done, choices)
+        returns ends the canvas unless it's None; it may ask again. changed(text) hears each
+        edit, and changed(None) the line closing, however it closes."""
+        self.asking = (prompt, text, done, choices, changed)
+
+    def status(self, key, text, state='busy'):
+        """A chip in the bar, as Provider.status(), from an action."""
+        self.statuses[key] = (text, state, self.clock())
+
+    def take_signals(self):
+        now = self.clock()
+        for what in self.source.signals():
+            if what[0] == 'pulse':
+                self.pulses[what[1]] = now
+            elif what[0] == 'status':
+                self.statuses[what[1]] = (what[2], what[3], now)
+
+    def in_motion(self, now):
+        """Forget motion that's over; whether any is left (the frame after this must be drawn too)."""
+        self.pulses = {k: t for k, t in self.pulses.items() if now - t < PULSE}
+        last = {'ok': SHOWN_OK, 'failed': SHOWN_FAILED, 'gone': DISSOLVE}
+        self.statuses = {k: v for k, v in self.statuses.items() if v[1] not in last or now - v[2] < last[v[1]]}
+        if self.reveal and now - self.reveal[2] >= REVEAL:
+            self.reveal = None
+        return bool(self.pulses or self.statuses or self.reveal)
 
     def say(self, text):
         """A line in the bar until the next key: what an action did."""
@@ -862,7 +957,7 @@ class Canvas:
             if None in stale or n.path in stale:
                 self.reload(n)
             todo.extend(n.kids)
-        self._preview = (self._preview[0], -1, None)    # fetched again, scrolled where it was
+        self._preview = (self._preview[0], -1, self._preview[2])   # fetched again (-1), scrolled where it was
         self.reattach()
 
     def reload(self, node):
@@ -959,7 +1054,10 @@ class Canvas:
         o, P, T = self.opts, self.paint, self.theme
         hard, soft, cap_l, cap_r = self.glyphs
         plain = o.glyphs == 'plain'
+        self.take_signals()
         self.refresh()
+        now, self.animate = self.clock(), animate
+        moving_parts = self.in_motion(now)
         full = w            # the tree gets what the reading pane leaves
         pane_w = int(w * o.pane_width) if self.pane and w >= 60 else 0
         w -= pane_w
@@ -1079,6 +1177,10 @@ class Canvas:
                     if o.grey_rest and n.parent is not self.focus.parent and n.parent is not self.focus:
                         c, bold = 'rest', False   # a branch you're not on
                     style = P.fg(c, s, bold)
+                if self.pulses and animate and not isinstance(n, Stub) and n.path in self.pulses:
+                    t = (now - self.pulses[n.path]) / PULSE      # from the highlight back to itself
+                    style = P.fg(blend(T.get('sel_bg', 214), T.get(c, c) if isinstance(c, str) else c, t),
+                                 1 - (1 - s) * t, True)
                 put(x, n.row, text, style)
                 cur = x + cells(text)
             if mark:
@@ -1130,7 +1232,9 @@ class Canvas:
             hint = '  '.join(acts + ['↑↓ move  →/tab open  ← parent  type filter  ⌃X fold  ' +
                                      ('pgup/pgdn scroll  ' if pane_w else '') + '⏎ choose  esc cancel'])
             lines.append(P.fg('hint') + clip(hint, full - 1) + '\033[0m')
-        return lines, (ox, oy) != (round(tx), round(ty)) or self.source.busy()
+        # motion begun while drawing (a pane's reveal) counts too: the next frame must follow
+        return lines, (ox, oy) != (round(tx), round(ty)) or self.source.busy() or moving_parts or \
+            bool(self.reveal)
 
     def pane_lines(self, preview, room, height):
         """The pane's lines, styled, for what preview() gave: text, a Picture, or a list of them."""
@@ -1149,7 +1253,7 @@ class Canvas:
 
     def typing_line(self, w):
         """The open typing line: its prompt in a chip, then what's typed, the end of it if it's long."""
-        prompt, text, _, choices = self.asking
+        prompt, text, _, choices, _ = self.asking
         P = self.paint
         head = P.on('bg', 'filter', True) + ' ' + printable(prompt) + ' ' + '\033[0m '
         room = max(4, w - cells(prompt) - 5)
@@ -1163,6 +1267,8 @@ class Canvas:
         name, and its preview wrapped, from self.scroll down."""
         P, f = self.paint, self.focus
         end = self.source.preview_end(f)
+        before = self._preview[2] if self._preview[0] is f else None
+        following = end and self._at_end
         if self._preview[0] is not f:
             self.scroll = sys.maxsize if end else 0
         elif end and self._preview[1] == -1 and self._at_end:
@@ -1170,6 +1276,9 @@ class Canvas:
         if self._preview[0] is not f or self._preview[1] != width:
             text = self.source.preview(f)
             self._preview = (f, width, None if text is None else self.pane_lines(text, width - 3, height - 2))
+            grew = before is not None and self._preview[2] is not None and len(self._preview[2]) > len(before)
+            if grew and following and self.animate:      # what's new at the end resolves out of noise
+                self.reveal = (f, len(before), self.clock())
         body = self._preview[2]
         room = width - 3
         self.page = max(1, height - 2)
@@ -1182,7 +1291,12 @@ class Canvas:
                 at = f' {self.scroll + 1}–{min(self.scroll + self.page, len(body))} of {len(body)} '
                 rule = clip('─' * max(0, room - cells(at) - 2) + at + '──', room)
             rows.append(P.fg('line', STRENGTH[5]) + rule)
-            rows += body[self.scroll:self.scroll + self.page]
+            shown = body[self.scroll:self.scroll + self.page]
+            if self.reveal and self.reveal[0] is f and self.animate:
+                left = 1 - (self.clock() - self.reveal[2]) / REVEAL
+                shown = [scramble(l, left, self.scroll + i) if self.scroll + i >= self.reveal[1] else l
+                         for i, l in enumerate(shown)]
+            rows += shown
         edge = P.fg('line', STRENGTH[4]) + '│ '
         return ['\033[0m' + edge + (rows[i] if i < len(rows) else '') + '\033[0m' for i in range(height)]
 
@@ -1217,6 +1331,17 @@ class Canvas:
             tail.append(('filter: ' + p.filter + '▏', 'bg', 'filter', False))
         if self.message:
             tail.append((self.message, 'bg', 'filter', False))
+        now = self.clock()
+        for key, (text, state, since) in self.statuses.items():
+            if state == 'busy':
+                glyph = SPIN[int((now - since) * 12) % len(SPIN)] if self.animate else '…'
+                tail.append((glyph + ' ' + text, 'bg', 'filter', False))
+            elif state == 'ok':
+                tail.append(('✓ ' + text, 'repo_clean_fg', 'repo_clean_bg', False))
+            elif state == 'failed':
+                tail.append(('✗ ' + text, 'repo_dirty_fg', 'repo_dirty_bg', True))
+            elif state == 'gone' and self.animate:
+                tail.append((dust(text, (now - since) / DISSOLVE, hash(key) % 97), 'bg', 'filter', False))
 
         segs = [(printable(t), *rest) for t, *rest in segs]
         tail = [(printable(t), *rest) for t, *rest in tail]
@@ -1409,9 +1534,11 @@ def apply(c, k, opts):
 
 def answer(c, k):
     """A key while the typing line is open."""
-    prompt, text, done, choices = c.asking
+    prompt, text, done, choices, changed = c.asking
     if k in ('esc', '\x03', '\x07'):
         c.asking = None
+        if changed:
+            changed(None)
         return None
     if choices is not None:
         if len(k) != 1 or k.lower() not in choices:
@@ -1429,8 +1556,12 @@ def answer(c, k):
             text = text[:text.rfind(' ') + 1]
         elif len(k) == 1 and k.isprintable():
             text += k
-        c.asking = (prompt, text, done, choices)
+        if changed and text != c.asking[1]:
+            changed(text)
+        c.asking = (prompt, text, done, choices, changed)
         return None
+    if changed:
+        changed(None)
     r = done(text)
     return None if r is None else ('done', r)
 
