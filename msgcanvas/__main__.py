@@ -3,7 +3,7 @@
     msgcanvas [ACCOUNT[/FOLDER]]   open your mail there (Esc leaves)
     msgcanvas setup                start accounts.toml, or make the sync/send configs from it
     msgcanvas import-thunderbird   add the accounts Thunderbird has (not its passwords)
-    msgcanvas login NAME           store an account's password (pass), or sign in (OAuth)
+    msgcanvas login NAME [--paste] store an account's password (pass), or sign in (OAuth)
     msgcanvas sync [NAME]          fetch new mail (mbsync), then index it (notmuch new)
 """
 import os, shutil, subprocess, sys
@@ -26,7 +26,7 @@ def configured():
     return accounts.load()[1]
 
 
-def login(name):
+def login(name, paste=False):
     found = {a.name: a for a in configured()}
     if name not in found:
         sys.exit(f"msgcanvas: no account {name!r} (accounts: {', '.join(found) or 'none'})")
@@ -34,11 +34,17 @@ def login(name):
     if a.auth in accounts.OAUTH:
         need('gpg')
         os.makedirs(os.path.dirname(a.token), exist_ok=True)
+        if os.path.exists(a.token):     # signing in again starts over: the file keeps the old flow
+            os.remove(a.token)
         run = ['python3', accounts.OAUTH2, a.token, '--authorize', '--provider', a.auth, '--email', a.address]
         if a.auth == 'microsoft':
-            print(f'Signing in {a.address}: open the link it shows, enter the code, and sign in.\n'
-                  'It asks for a client secret: there isn\'t one, press Enter.\n')
-            run += ['--authflow', 'devicecode', '--client-id', accounts.MICROSOFT_CLIENT]
+            # A browser, as Thunderbird signs in: universities often block device codes.
+            # --paste: the browser can't reach this machine, so copy the code from its address bar.
+            print(f'Signing in {a.address}: open the link it shows in your browser and sign in'
+                  + (', then copy the code= part of the address it ends on.\n' if paste else '.\n')
+                  + 'It asks for a client secret first: there isn\'t one, press Enter.\n')
+            run += ['--authflow', 'authcode' if paste else 'localhostauthcode',
+                    '--client-id', accounts.MICROSOFT_CLIENT]
         else:
             # Google's device codes don't cover Gmail: a browser, coming back to localhost here
             print(f'Signing in {a.address}: it asks for your Google OAuth client\'s id and secret\n'
@@ -117,8 +123,8 @@ def main(argv=None):
                   'Next: `msgcanvas login NAME` for each, then `msgcanvas sync`.')
     elif cmd == 'import-thunderbird' and len(argv) == 1:
         import_thunderbird()
-    elif cmd == 'login' and len(argv) == 2:
-        login(argv[1])
+    elif cmd == 'login' and len(argv) in (2, 3) and argv[2:] in ([], ['--paste']):
+        login(argv[1], paste=argv[2:] == ['--paste'])
     elif cmd == 'sync' and len(argv) <= 2:
         sync(argv[1] if len(argv) == 2 else None)
     elif len(argv) <= 1 and cmd not in ('login', 'sync', 'import-thunderbird'):
