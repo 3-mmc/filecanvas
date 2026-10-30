@@ -225,6 +225,21 @@ class Canvas(unittest.TestCase):
         day = dt.date(2026, 10, 31)
         self.assertEqual(p.day_label(day, p.items(day)), "31 Sat  21:00 Maria's Halloween or Petra's birthday  +1")
 
+    def test_quiet_calendars_stay_behind_your_own(self):
+        with open(os.path.join(self.home, 'calendars', 'moon.ics'), 'w') as f:
+            f.write(ics(['UID:m', 'DTSTART;VALUE=DATE:20261015', 'SUMMARY:A moon'],
+                        ['UID:m2', 'DTSTART;VALUE=DATE:20261020', 'SUMMARY:Full moon'],
+                        ['UID:m3', 'DTSTART;VALUE=DATE:20261031', 'SUMMARY:Halloween']))
+        p = cal.Calendar(os.path.join(self.home, 'calendars'), self.plans, today=TODAY, watch=0, quiet={'moon'})
+        oct15, oct20 = dt.date(2026, 10, 15), dt.date(2026, 10, 20)
+        self.assertEqual(p.day_label(oct15, p.items(oct15)), '15 Thu  Appt with Dr Ng  +1')   # yours first
+        self.assertTrue(p.background(p.items(oct20)))
+        self.assertIsNone(p.soon(p.by_day[dt.date(2026, 10, 31)][-1]))         # holidays don't count down
+        month = next(k for k in p.children(p.root()) if k.data['month'] == dt.date(2026, 10, 1))
+        self.assertEqual(p.count(month), ('3', 'stub', False))                   # nor count
+        day = next(k for k in p.children(month) if k.data.get('day') == oct20)
+        self.assertEqual(p.dim(day), 0.7 * 0.6)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -38,7 +38,9 @@ and its branch lit, the rest fade (to dust in the bar) but stay, to change your 
 
 **Feeds** (`calcanvas add`): a calendar's .ics address, fetched every 15 minutes while the canvas
 is open (a chip in the bar while it does), and by `calcanvas sync`. Asking first whether it's
-changed costs little. Read-only.
+changed costs little. Read-only. A public calendar (holidays, the moon) is **quiet**: its days come
+after your own things, never lead a day's label, show fainter, don't count down or count in a
+month, and are fetched twice a day (`quiet = false` / `every = 15` in feeds.toml to change it).
 
 | where | the address |
 | --- | --- |

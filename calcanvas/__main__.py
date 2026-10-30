@@ -36,7 +36,9 @@ def add(name, url=None):
         url = getpass.getpass('address: ').strip()
     if not url.startswith(('https://', 'http://', 'webcal://')):
         sys.exit('calcanvas: that isn\'t a web address (https://… or webcal://…)')
-    feed = feeds.Feed(name, url)
+    feed = feeds.Feed(name, url, quiet=feeds.public(url))      # holidays and such: in the background
+    if feed.quiet:
+        feed.every = 720                                            # and they hardly change
     while any(f.key == feed.key for f in got):
         feed.key += '-2'
     try:
@@ -45,7 +47,9 @@ def add(name, url=None):
         sys.exit(f'calcanvas: {e}')
     feeds.save(got + [feed])
     print(f'{name}: {feeds.count(feed)} events from {feed.where()}, fetched every {feed.every} minutes '
-          'while calcanvas is open (`calcanvas sync` any time).')
+          'while calcanvas is open (`calcanvas sync` any time)'
+          + ('; a public calendar, so quiet: after your own things, fainter (quiet = false in feeds.toml to change it).'
+             if feed.quiet else '.'))
 
 
 def remove(name):

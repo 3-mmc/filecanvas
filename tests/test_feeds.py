@@ -78,12 +78,14 @@ class Feeds(unittest.TestCase):
 
     def test_feeds_toml_round_trips_and_only_you_can_read_it(self):
         got = [feeds.Feed('Mine "quoted"', 'https://calendar.google.com/calendar/ical/a%40b/private-x/basic.ics'),
-               feeds.Feed('Holidays', 'webcal://example.com/h.ics', every=60)]
+               feeds.Feed('Holidays', 'webcal://example.com/h.ics', every=60, quiet=True)]
         feeds.save(got)
         self.assertEqual(stat.S_IMODE(os.stat(feeds.FEEDS).st_mode), 0o600)
         back = feeds.load()
-        self.assertEqual([(f.name, f.url, f.key, f.every) for f in back],
-                         [(f.name, f.url, f.key, f.every) for f in got])
+        self.assertEqual([(f.name, f.url, f.key, f.every, f.quiet) for f in back],
+                         [(f.name, f.url, f.key, f.every, f.quiet) for f in got])
+        self.assertTrue(feeds.public('https://calendar.google.com/calendar/ical/en.usa%23holiday/public/basic.ics'))
+        self.assertFalse(feeds.public('https://calendar.google.com/calendar/ical/a%40b/private-x/basic.ics'))
 
     def test_the_canvas_fetches_in_the_background_and_says_so(self):
         f = feeds.Feed('bg', self.base + '/bg.ics')

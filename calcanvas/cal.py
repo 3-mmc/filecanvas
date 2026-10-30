@@ -324,8 +324,10 @@ class Calendar(fc.Provider):
     KINDS = ('calendar', 'month', 'day', 'span', 'event', 'fork', 'alt', 'step', 'detail')
 
     def __init__(self, folder=CALENDARS, plans=None, today=None, watch=2.0, zone=None, now=None, feeds=(),
-                 fetch=None):
+                 fetch=None, quiet=None):
         self.folder, self.zone = folder, zone or local_zone()
+        # calendars in the background (holidays, the moon): after your own, fainter, never leading a day
+        self.quiet = set(quiet if quiet is not None else (f.name for f in feeds if getattr(f, 'quiet', False)))
         self.fixed_now = now or (dt.datetime.combine(today, dt.time(12), self.zone) if today else None)
         self.plans = Plans(plans)
         self.lock = threading.Lock()
@@ -361,6 +363,8 @@ class Calendar(fc.Provider):
 
     def soon(self, e):
         """How long until `e`, when it's close ('in 3h', 'tomorrow', 'now'); None when it isn't."""
+        if e.calendar in self.quiet:
+            return None
         now = self.now()
         if all_day(e.start):
             days = (e.first - now.date()).days
@@ -425,7 +429,8 @@ class Calendar(fc.Provider):
             else:
                 by_day.setdefault(e.first, []).append(e)
         for es in by_day.values():
-            es.sort(key=lambda e: (not all_day(e.start), e.start if not all_day(e.start) else dt.datetime.min.replace(tzinfo=self.zone), e.title))
+            es.sort(key=lambda e: (e.calendar in self.quiet, not all_day(e.start),
+                                   e.start if not all_day(e.start) else dt.datetime.min.replace(tzinfo=self.zone), e.title))
         with self.lock:
             self.names, self.by_day, self.spans = names, by_day, sorted(spans, key=lambda e: (e.first, e.title))
 
@@ -595,12 +600,22 @@ class Calendar(fc.Provider):
         """The event a day's label starts with, if it's timed: an event, or a fork's first."""
         if not items:
             return None
-        kind, what = lead(items)
+        kind, what = self.lead(items)
         if kind == 'fork':
             k = self.kept(day, what)
             got = next((a for a in what if a[0] == k), None) if k else None
             return got[2] if got and got[1] == 'event' else None if got else self.first_event(what)
         return what
+
+    def lead(self, items):
+        """What a day's label starts with: a fork, being what's to decide, else the first of your
+        own, else the first thing."""
+        return next((i for i in items if i[0] == 'fork'), None) or \
+            next((i for i in items if i[1].calendar not in self.quiet), items[0])
+
+    def background(self, items):
+        """Whether all that's on a day is from quiet calendars."""
+        return bool(items) and all(k == 'event' and w.calendar in self.quiet for k, w in items)
 
     def day_leads(self, day, items):
         return self.leads(self.lead_event(day, items))
@@ -609,7 +624,7 @@ class Calendar(fc.Provider):
         head = f'{day.day:>2} {day:%a}'
         if not items:
             return head + ('  today' if day == self.today() else '')
-        kind, what = lead(items)
+        kind, what = self.lead(items)
         first = self.fork_label(day, what) if kind == 'fork' else self.title(what)
         return f'{head}  {first}' + (f'  +{len(items) - 1}' if len(items) > 1 else '')
 
@@ -672,8 +687,7 @@ class Calendar(fc.Provider):
     def count(self, node):
         d = node.data or {}
         if node.kind == 'month':
-            n = len(self.month_rows(d['month']))
-            n -= d['month'] <= self.today() < add_months(d['month'], 1) and not self.items(self.today())
+            n = sum(1 for r in self.month_rows(d['month']) if r[0] == 'span' or (r[2] and not self.background(r[2])))
             return (str(n), 'stub', False) if n else None
         if node.kind == 'span':
             e, today = d['event'], self.today()
@@ -723,9 +737,11 @@ class Calendar(fc.Provider):
             return 0.45 if k and k != d['id'] else 1.0
         if node.kind == 'month' and add_months(d['month'], 1) <= self.today():
             return 0.7
+        quiet = 0.6 if (node.kind == 'day' and self.background(d['items'])) or \
+            (node.kind == 'event' and d['event'].calendar in self.quiet) else 1.0
         if node.kind == 'day' and d['day'] < self.today():
-            return 0.7
-        return 1.0
+            return 0.7 * quiet
+        return quiet
 
     def line(self, node):
         d = node.data or {}
@@ -965,11 +981,6 @@ def clean(note):
 
 def short(text, room=28):
     return fc.clip(text, room)
-
-
-def lead(items):
-    """What a day's label starts with: a fork, being what's to decide, else the first thing."""
-    return next((i for i in items if i[0] == 'fork'), items[0])
 
 
 def alt_title(a):
