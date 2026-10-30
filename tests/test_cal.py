@@ -178,7 +178,7 @@ class Canvas(unittest.TestCase):
         self.screen()
         nov = self.c.focus
         day = next(k for k in nov.shown() if k.data.get('day') == dt.date(2026, 11, 23))
-        self.assertEqual(day.name, '23 Mon  Flight  +1')        # the flight, then the fork
+        self.assertEqual(day.name, '23 Mon  as it is or drive instead  +1')   # the fork leads the day
         self.assertEqual([self.p.label(k) for k in self.p.children(day)], ['Flight', 'as it is or drive instead'])
 
     def test_close_things_put_their_time_first_and_say_how_long(self):
@@ -217,6 +217,13 @@ class Canvas(unittest.TestCase):
         self.assertEqual(cal.shade(dt.date(2026, 10, 1)), cal.MONTHS[10])
         h = lambda c: __import__('colorsys').rgb_to_hls(*(int(c[i:i + 2], 16) / 255 for i in (1, 3, 5)))[0]
         self.assertTrue(all(abs(h(c) - h(cal.MONTHS[10])) < 0.02 for c in oct_))     # all orange
+
+    def test_a_fork_leads_its_day_before_a_holiday(self):
+        with open(os.path.join(self.home, 'calendars', 'holidays.ics'), 'w') as f:
+            f.write(ics(['UID:h', 'DTSTART;VALUE=DATE:20261031', 'SUMMARY:Halloween']))
+        p = cal.Calendar(os.path.join(self.home, 'calendars'), self.plans, today=TODAY, watch=0)
+        day = dt.date(2026, 10, 31)
+        self.assertEqual(p.day_label(day, p.items(day)), "31 Sat  21:00 Maria's Halloween or Petra's birthday  +1")
 
 
 if __name__ == '__main__':
