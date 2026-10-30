@@ -53,7 +53,7 @@ Twigs in this repo live in `twigs/apps/`; one in another package registers under
 group `twigs.apps` (its value the module holding `APP`), and `twigs apps` finds it.
 
 `twigs/core.py` is one file with only the standard library, so it can be copied into a program
-that wants the canvas without depending on twigs: [cdeck](https://github.com/3-mmc/cdeck) does,
+that wants the canvas without depending on twigs: [cdeck](https://github.com/vmagierski/cdeck) does,
 for its file canvas.
 
 ## Tests
