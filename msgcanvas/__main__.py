@@ -1,4 +1,4 @@
-"""msgcanvas: mail (and, later, chat) on one canvas you move across.
+"""msgcanvas: mail and chat on one canvas you move across.
 
     msgcanvas [ACCOUNT[/FOLDER]]   open your mail there (Esc leaves)
     msgcanvas setup                start accounts.toml, or make the sync/send configs from it
