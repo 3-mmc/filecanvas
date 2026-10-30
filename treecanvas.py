@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""filecanvas: the file system as one canvas you move across.
+"""treecanvas: a tree as one canvas you move across; the file system, unless you give it another.
+(It was filecanvas: the file system is still what it shows by default.)
 
 Every folder you open keeps its place on a tidy-tree layout (depth to the right, children
 spread down, each block of children centred on its parent and shifted only as much as it
@@ -7,16 +8,16 @@ needs to keep clear of its neighbours). A camera eases after the selection and o
 when the selection leaves a box around the middle of the screen. The path you're on is drawn
 in the theme's path colour; everything else dims with its distance from it.
 
-    python3 filecanvas.py [START]          # prints the chosen path on stdout, nothing on Esc
-    cd "$(python3 filecanvas.py)"
+    python3 treecanvas.py [START]          # prints the chosen path on stdout, nothing on Esc
+    cd "$(python3 treecanvas.py)"
 
 In your shell: `cdi` goes to a folder you choose, ⌃T puts a path in at the cursor:
 
-    eval "$(python3 /path/to/filecanvas.py --init bash)"     # or zsh; fish: --init fish | source
+    eval "$(python3 /path/to/treecanvas.py --init bash)"     # or zsh; fish: --init fish | source
 
 Keys: ↑↓ siblings · → or Tab open · ← parent (the branch stays open) · type to filter this
 column · Backspace unfilters · ⌃X fold everything off the current path · Enter choose · Esc.
-Settings are flags (--help), and any of them can live in ~/.config/filecanvas/config.json.
+Settings are flags (--help), and any of them can live in ~/.config/treecanvas/config.json.
 
 The file system is one provider of the tree (FileSystem); anything else can be another
 (Provider, and Tree for nested dicts): `pick(provider=...)`.
@@ -25,7 +26,8 @@ import argparse, json, os, re, select, shutil, stat, subprocess, sys, threading,
 from concurrent.futures import ThreadPoolExecutor
 
 CONFIG = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'),
-                      'filecanvas', 'config.json')
+                      'treecanvas', 'config.json')
+OLD_CONFIG = CONFIG.replace(os.sep + 'treecanvas' + os.sep, os.sep + 'filecanvas' + os.sep)   # its name before
 
 # -- colour
 
@@ -1489,41 +1491,41 @@ def shell_word(path, fish=False):
 
 
 INIT = {
-    'bash': '''# filecanvas: `@CMD@ [FOLDER]` goes to a folder you choose on the canvas;@KEYDOC@
-if ! type -t @CMD@ >/dev/null 2>&1 || [[ $(declare -f @CMD@ 2>/dev/null) == *filecanvas* ]]; then
-    @CMD@() { local p; p=$(@RUN@ --dirs-only --on-start --print absolute "${1:-.}") && builtin cd -- "$p"; : filecanvas; }
+    'bash': '''# treecanvas: `@CMD@ [FOLDER]` goes to a folder you choose on the canvas;@KEYDOC@
+if ! type -t @CMD@ >/dev/null 2>&1 || [[ $(declare -f @CMD@ 2>/dev/null) == *treecanvas* || $(declare -f @CMD@ 2>/dev/null) == *filecanvas* ]]; then
+    @CMD@() { local p; p=$(@RUN@ --dirs-only --on-start --print absolute "${1:-.}") && builtin cd -- "$p"; : treecanvas; }
 else
-    echo "filecanvas: @CMD@ is already a command here, so it's left alone (--cmd NAME picks another)" >&2
+    echo "treecanvas: @CMD@ is already a command here, so it's left alone (--cmd NAME picks another)" >&2
 fi
-_filecanvas_insert() {
+_treecanvas_insert() {
     local p; p=$(@RUN@ --print shell) || return
     READLINE_LINE=${READLINE_LINE:0:READLINE_POINT}$p${READLINE_LINE:READLINE_POINT}
     READLINE_POINT=$((READLINE_POINT + ${#p}))
 }
 @BIND@''',
-    'fish': '''# filecanvas: `@CMD@ [FOLDER]` goes to a folder you choose on the canvas;@KEYDOC@
-if not type -q @CMD@; or functions @CMD@ 2>/dev/null | string match -q '*filecanvas*'
-    function @CMD@ --description 'cd to a folder chosen on the canvas (filecanvas)'
+    'fish': '''# treecanvas: `@CMD@ [FOLDER]` goes to a folder you choose on the canvas;@KEYDOC@
+if not type -q @CMD@; or functions @CMD@ 2>/dev/null | string match -qr 'treecanvas|filecanvas'
+    function @CMD@ --description 'cd to a folder chosen on the canvas (treecanvas)'
         set -l start .
         set -q argv[1]; and set start $argv[1]
         set -l p (@RUN@ --dirs-only --on-start --print absolute $start | string collect); and builtin cd -- $p
     end
 else
-    echo "filecanvas: @CMD@ is already a command here, so it's left alone (--cmd NAME picks another)" >&2
+    echo "treecanvas: @CMD@ is already a command here, so it's left alone (--cmd NAME picks another)" >&2
 end
-function _filecanvas_insert --description 'put a path chosen on the canvas in at the cursor (filecanvas)'
+function _treecanvas_insert --description 'put a path chosen on the canvas in at the cursor (treecanvas)'
     set -l p (@RUN@ --print fish | string collect); and commandline -i -- $p
     commandline -f repaint
 end
 @BIND@''',
-    'zsh': '''# filecanvas: `@CMD@ [FOLDER]` goes to a folder you choose on the canvas;@KEYDOC@
-if (( ! $+commands[@CMD@] && ! $+aliases[@CMD@] && ! $+builtins[@CMD@] )) && [[ -z ${functions[@CMD@]} || ${functions[@CMD@]} == *filecanvas* ]]; then
-    @CMD@() { local p; p=$(@RUN@ --dirs-only --on-start --print absolute "${1:-.}") && builtin cd -- "$p"; : filecanvas }
+    'zsh': '''# treecanvas: `@CMD@ [FOLDER]` goes to a folder you choose on the canvas;@KEYDOC@
+if (( ! $+commands[@CMD@] && ! $+aliases[@CMD@] && ! $+builtins[@CMD@] )) && [[ -z ${functions[@CMD@]} || ${functions[@CMD@]} == *(treecanvas|filecanvas)* ]]; then
+    @CMD@() { local p; p=$(@RUN@ --dirs-only --on-start --print absolute "${1:-.}") && builtin cd -- "$p"; : treecanvas }
 else
-    print -u2 "filecanvas: @CMD@ is already a command here, so it's left alone (--cmd NAME picks another)"
+    print -u2 "treecanvas: @CMD@ is already a command here, so it's left alone (--cmd NAME picks another)"
 fi
-_filecanvas_insert() { local p; p=$(@RUN@ --print shell) && LBUFFER+=$p; zle reset-prompt }
-zle -N _filecanvas_insert
+_treecanvas_insert() { local p; p=$(@RUN@ --print shell) && LBUFFER+=$p; zle reset-prompt }
+zle -N _treecanvas_insert
 @BIND@''',
 }
 
@@ -1532,7 +1534,7 @@ def init(shell, cmd='cdi', key='ctrl-t', run=None):
     """The lines for a shell's rc file: `cmd` and, unless key is 'none', a key that inserts a path."""
     import re, shlex
     if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_-]*', cmd):
-        sys.exit(f'filecanvas: {cmd!r} is not a command name')
+        sys.exit(f'treecanvas: {cmd!r} is not a command name')
     run = run or shlex.join([sys.executable, os.path.abspath(__file__)])
     bind, doc = '', ''
     m = re.fullmatch(r'(ctrl|alt)-([a-z])', key.lower())
@@ -1541,15 +1543,15 @@ def init(shell, cmd='cdi', key='ctrl-t', run=None):
         doc = f' {key} puts a path in at the cursor.'
         if shell == 'bash':
             seq = ('\\C-' if mod == 'ctrl' else '\\e') + letter
-            bind = "bind -x '\"" + seq + "\": _filecanvas_insert'"
+            bind = "bind -x '\"" + seq + "\": _treecanvas_insert'"
         elif shell == 'fish':
             seq = ('\\c' if mod == 'ctrl' else '\\e') + letter   # in vi mode too
-            bind = f"bind {seq} _filecanvas_insert\nbind -M insert {seq} _filecanvas_insert"
+            bind = f"bind {seq} _treecanvas_insert\nbind -M insert {seq} _treecanvas_insert"
         else:
             seq = '^' + letter.upper() if mod == 'ctrl' else '^[' + letter
-            bind = "bindkey '" + seq + "' _filecanvas_insert"
+            bind = "bindkey '" + seq + "' _treecanvas_insert"
     elif key != 'none':
-        sys.exit(f"filecanvas: --key takes ctrl-<letter>, alt-<letter> or none, not {key!r}")
+        sys.exit(f"treecanvas: --key takes ctrl-<letter>, alt-<letter> or none, not {key!r}")
     return (INIT[shell].replace('@CMD@', cmd).replace('@RUN@', run).replace('@BIND@', bind)
             .replace('@KEYDOC@', doc).rstrip() + '\n')
 
@@ -1756,7 +1758,7 @@ def theme(name, overrides):
         t = theme(data.pop('base', 'powerline'), {})
         t.update(data)
     else:
-        sys.exit(f"filecanvas: no theme {name!r} (themes: {', '.join(THEMES)}, or a .json file)")
+        sys.exit(f"treecanvas: no theme {name!r} (themes: {', '.join(THEMES)}, or a .json file)")
     t.update(overrides)
     return t
 
@@ -1792,8 +1794,8 @@ def parser():
                    help='how to print the choice: from here or ~ (display), absolute, or quoted for '
                         'bash/zsh (shell) or fish')
     a.add_argument('--init', choices=tuple(INIT), help='print the lines for your shell\'s rc file: '
-                   'eval "$(python3 filecanvas.py --init bash)" (or zsh); in fish, '
-                   'python3 filecanvas.py --init fish | source')
+                   'eval "$(python3 treecanvas.py --init bash)" (or zsh); in fish, '
+                   'python3 treecanvas.py --init fish | source')
     a.add_argument('--cmd', default='cdi', help='the name --init gives the cd command (cdi)')
     a.add_argument('--key', default='ctrl-t', help='the key --init binds to put a path in at the cursor: '
                    'ctrl-<letter>, alt-<letter> or none (ctrl-t)')
@@ -1822,19 +1824,20 @@ def options(argv=(), skip=(), defaults=None, **settings):
     a = parser()
     a.set_defaults(**(defaults or {}))
     overrides = {}
-    if os.path.isfile(CONFIG):
+    path = CONFIG if os.path.isfile(CONFIG) or not os.path.isfile(OLD_CONFIG) else OLD_CONFIG
+    if os.path.isfile(path):
         try:
-            with open(CONFIG) as f:
+            with open(path) as f:
                 conf = json.load(f)
         except (OSError, ValueError) as e:
-            sys.exit(f'filecanvas: {CONFIG}: {e}')
+            sys.exit(f'treecanvas: {path}: {e}')
         overrides = {} if 'colors' in skip else conf.pop('colors', {})
         conf.pop('colors', None)
         conf = {k.replace('-', '_'): v for k, v in conf.items() if k not in skip}
         known = {x.dest for x in a._actions}
         unknown = set(conf) - known
         if unknown:
-            print(f"filecanvas: {CONFIG}: ignoring {', '.join(sorted(unknown))}", file=sys.stderr)
+            print(f"treecanvas: {path}: ignoring {', '.join(sorted(unknown))}", file=sys.stderr)
         a.set_defaults(**{k: v for k, v in conf.items() if k in known})
     opts = a.parse_args(list(argv))
     opts.footer = opts.header = opts.provider = None
@@ -1845,7 +1848,7 @@ def options(argv=(), skip=(), defaults=None, **settings):
             with open(os.path.expanduser(opts.tree)) as f:
                 opts.provider = Tree(json.load(f), os.path.basename(opts.tree))
         except (OSError, ValueError) as e:
-            sys.exit(f'filecanvas: {opts.tree}: {e}')
+            sys.exit(f'treecanvas: {opts.tree}: {e}')
     opts.colours = theme(opts.theme, overrides)
     if opts.ls_colors is None:
         opts.ls_colors = opts.colours.get('ls_colors', True)

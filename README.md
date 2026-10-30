@@ -1,6 +1,8 @@
-# filecanvas
+# treecanvas
 
-A prototype file picker for the terminal: the file system as one canvas you move across.
+A tree as one canvas you move across, in the terminal: by default the file system, as a file
+picker; given a provider, anything shaped like a tree (mail and chats, in
+[msgcanvas](https://github.com/3-mmc/msgcanvas)). It was called filecanvas.
 
 Every folder you open keeps its place on a tree that branches right, each folder's children
 centred on its row and spreading up and down only as far as they need. The camera eases after
@@ -14,8 +16,8 @@ git branch at the end, pink when the repo has changes), entries take their colou
 `✖` conflicted, `•` on a folder with changes inside. Files git ignores are dimmed.
 
 ```
-python3 filecanvas.py [START]        # prints the chosen path; nothing on Esc
-cd "$(python3 filecanvas.py)"
+python3 treecanvas.py [START]        # prints the chosen path; nothing on Esc
+cd "$(python3 treecanvas.py)"
 ```
 
 Python 3, no dependencies. Linux, macOS, WSL.
@@ -60,7 +62,7 @@ Python 3, no dependencies. Linux, macOS, WSL.
 | `--pane-width F` | 0.45 | the pane's share of the width |
 | `--tree FILE` | | show a JSON file as the tree instead (objects are branches, the rest leaves shown in the pane) |
 
-Any of these can live in `~/.config/filecanvas/config.json`, flags still winning, with your own
+Any of these can live in `~/.config/treecanvas/config.json`, flags still winning, with your own
 colours on top of the theme's under `colors`:
 
 ```json
@@ -68,7 +70,7 @@ colours on top of the theme's under `colors`:
 ```
 
 A theme file is the same roles, starting from another theme: `{"base": "gruvbox", "path": 214}`.
-The roles are listed at the top of `filecanvas.py` (`THEMES`). Themes only choose colours and
+The roles are listed at the top of `treecanvas.py` (`THEMES`). Themes only choose colours and
 defaults; every setting works with every theme.
 
 ## Other trees
@@ -79,7 +81,7 @@ how bright it is, and the bar along the bottom; the canvas does the layout, the 
 and the keys. A node's `path` is its id, and Enter returns it.
 
 ```python
-import filecanvas as fc
+import treecanvas as fc
 
 class Mail(fc.Provider):
     def children(self, node):                      # the only one you need
@@ -92,7 +94,7 @@ fc.pick(provider=Mail())
 ```
 
 `fc.Tree({...})` turns nested dicts into a tree (`--tree FILE.json` from the command line), for
-trying it out. The hooks are listed on `Provider` in `filecanvas.py`: `locate`, `label`, `colour`,
+trying it out. The hooks are listed on `Provider` in `treecanvas.py`: `locate`, `label`, `colour`,
 `mark`, `dim`, `bar`, and `changed` / `busy` for work that lands in the background.
 
 A provider can also keep the canvas open, the way a mail or chat client would:
@@ -105,7 +107,7 @@ A provider can also keep the canvas open, the way a mail or chat client would:
   (every node's, with no path). What's open and chosen stays where the ids still are; a chosen
   node that's gone gives way to its neighbour.
 
-`python3 -m unittest test_filecanvas` runs the tests.
+`python3 -m unittest test_treecanvas` runs the tests.
 
 ## In your shell
 
@@ -114,9 +116,9 @@ FOLDER), what's in it beside; Enter goes to the folder you're on, Esc stays put.
 path in at the cursor, quoted. Add one line to your shell's rc file:
 
 ```bash
-eval "$(python3 /path/to/filecanvas.py --init bash)"      # ~/.bashrc
-eval "$(python3 /path/to/filecanvas.py --init zsh)"       # ~/.zshrc
-python3 /path/to/filecanvas.py --init fish | source       # ~/.config/fish/config.fish
+eval "$(python3 /path/to/treecanvas.py --init bash)"      # ~/.bashrc
+eval "$(python3 /path/to/treecanvas.py --init zsh)"       # ~/.zshrc
+python3 /path/to/treecanvas.py --init fish | source       # ~/.config/fish/config.fish
 ```
 
 `--cmd NAME` names the command something else, and `--key alt-f` (any `ctrl-` or `alt-` letter,
@@ -133,8 +135,8 @@ Started as a prototype for [cdeck](https://github.com/vmagierski/cdeck)'s folder
 One file, no dependencies, so it can be copied into another project:
 
 ```python
-import filecanvas
-path = filecanvas.pick('~/src/cd', dirs_only=True, theme='amber')   # absolute path, or None
+import treecanvas
+path = treecanvas.pick('~/src/cd', dirs_only=True, theme='amber')   # absolute path, or None
 ```
 
 A start that doesn't exist yet (`~/src/cd`) opens its folder filtered by the rest. Any flag can

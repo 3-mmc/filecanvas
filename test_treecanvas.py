@@ -1,9 +1,9 @@
 """Providers: a tree that isn't the file system, on the same canvas.
 
-    python3 -m unittest test_filecanvas"""
+    python3 -m unittest test_treecanvas"""
 import os, re, tempfile, threading, unittest
 
-import filecanvas as fc
+import treecanvas as fc
 
 ANSI = re.compile(r'\x1b\[[0-9;?]*[a-zA-Z]')
 MAIL = {'Inbox': {'Kiln quote': {'from Ann': 'about the kiln', 'from Bo': 'reply'}, 'Rail pass': 'x'},
