@@ -63,7 +63,8 @@ maildir = "~/Mail"
 max_messages = 2000     # newest messages kept per folder (the server keeps everything)
 
 # [[account]]
-# name = "gmail"                      # a short name: letters, digits, -
+# name = "gmail"                      # what's shown: anything, the address say
+# key = "gmail"                       # what its mail, password and token are filed under (from the name if left out)
 # address = "{email}"
 # type = "gmail"
 
@@ -95,9 +96,14 @@ class Account:
         v.update({k: defaults[k] for k in ('max_messages',) if k in defaults})
         v.update(entry)
         self.type = kind
-        self.name = v.get('name', '')
-        if not re.fullmatch(r'[a-z0-9][a-z0-9-]*', self.name):
-            raise ValueError(f'{self.name!r}: a name is lower-case letters, digits and -')
+        # name: what's shown, anything. key: what its mail folder, password, token and sync are
+        # filed under: `key`, else the name if it's a plain word, else one made from the name.
+        self.name = str(v.get('name', '')).strip()
+        if not self.name:
+            raise ValueError('an account needs a name')
+        self.key = str(v.get('key') or slug(self.name))
+        if not re.fullmatch(r'[a-z0-9][a-z0-9-]*', self.key):
+            raise ValueError(f'{self.name}: key {self.key!r} is lower-case letters, digits and -')
         if '@' not in v.get('address', ''):
             raise ValueError(f'{self.name}: no address')
         for host in ('imap_host', 'smtp_host'):
@@ -113,17 +119,17 @@ class Account:
             raise ValueError(f"{self.name}: auth {self.auth!r} isn't password, {' or '.join(OAUTH)}")
         self.max_messages = int(v['max_messages'])
         self.pipeline = int(v['pipeline'])      # IMAP commands in flight at once; 0: mbsync's default
-        self.maildir = os.path.join(os.path.expanduser(defaults.get('maildir', '~/Mail')), self.name)
+        self.maildir = os.path.join(os.path.expanduser(defaults.get('maildir', '~/Mail')), self.key)
 
     @property
     def token(self):
-        return os.path.join(DATA, 'tokens', self.name + '.gpg')
+        return os.path.join(DATA, 'tokens', self.key + '.gpg')
 
     def secret(self, smtp=False):
         """The shell command that prints this account's password or a fresh OAuth token."""
         if self.auth in OAUTH:
             return shlex.join(['python3', OAUTH2, self.token])
-        return shlex.join(['pass', 'show', 'mail/' + self.name])
+        return shlex.join(['pass', 'show', 'mail/' + self.key])
 
 
 def load(path=ACCOUNTS):
@@ -132,11 +138,17 @@ def load(path=ACCOUNTS):
         data = tomllib.load(f)
     defaults = data.get('defaults', {})
     accounts = [Account(e, defaults) for e in data.get('account', [])]
-    names = [a.name for a in accounts]
-    for n in set(names):
-        if names.count(n) > 1:
-            raise ValueError(f'{n}: two accounts have this name')
+    for what in ('name', 'key'):
+        seen = [getattr(a, what) for a in accounts]
+        for n in set(seen):
+            if seen.count(n) > 1:
+                raise ValueError(f'{n}: two accounts have this {what}')
     return defaults, accounts
+
+
+def slug(name):
+    """A key from a name: lower-case letters, digits and -, so aaron@gmail.com is aaron-gmail-com."""
+    return re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-') or 'account'
 
 
 def chat_settings(path=ACCOUNTS):
@@ -163,7 +175,7 @@ def quoted(text):
 def mbsyncrc(accounts):
     out = [MARK, '']
     for a in accounts:
-        out += [f'IMAPAccount {a.name}',
+        out += [f'IMAPAccount {a.key}',
                 f'Host {a.imap_host}',
                 f'Port {a.imap_port}',
                 f'User {a.user}',
@@ -176,14 +188,14 @@ def mbsyncrc(accounts):
         if a.pipeline:
             out.append(f'PipelineDepth {a.pipeline}')
         out += ['',
-                f'IMAPStore {a.name}-far', f'Account {a.name}', '',
-                f'MaildirStore {a.name}-near',
+                f'IMAPStore {a.key}-far', f'Account {a.key}', '',
+                f'MaildirStore {a.key}-near',
                 f'Path {quoted(a.maildir + "/")}',
                 f'Inbox {quoted(a.maildir + "/INBOX")}',
                 'SubFolders Verbatim', '',
-                f'Channel {a.name}',
-                f'Far :{a.name}-far:',
-                f'Near :{a.name}-near:',
+                f'Channel {a.key}',
+                f'Far :{a.key}-far:',
+                f'Near :{a.key}-near:',
                 f'Patterns {a.patterns}',
                 'Create Near',
                 # Fetch only, for now: nothing msgcanvas does changes the server yet.
@@ -200,7 +212,7 @@ def mbsyncrc(accounts):
 def msmtprc(accounts, log):
     out = [MARK, '', 'defaults', 'auth on', 'tls on', f'tls_trust_file {CERTS}', f'logfile {log}', '']
     for a in accounts:
-        out += [f'account {a.name}',
+        out += [f'account {a.key}',
                 f'host {a.smtp_host}',
                 f'port {a.smtp_port}',
                 f'tls_starttls {"off" if a.smtp_port == 465 else "on"}',
@@ -211,7 +223,7 @@ def msmtprc(accounts, log):
             out.append('auth xoauth2')
         out.append('')
     if accounts:
-        out.append(f'account default : {accounts[0].name}')
+        out.append(f'account default : {accounts[0].key}')
     return '\n'.join(out) + '\n'
 
 

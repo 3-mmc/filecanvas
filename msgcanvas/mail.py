@@ -184,7 +184,7 @@ class Mail(fc.Provider):
             return
         if not new:
             return
-        mine = {a.name for a in self.accounts}
+        mine = {a.key for a in self.accounts}
         for path, _, _ in new:
             rel = os.path.relpath(path, root).split(os.sep)
             if rel[0] in mine and len(rel) > 2:          # account / folder… / cur|new / file
@@ -203,7 +203,7 @@ class Mail(fc.Provider):
     def children(self, node):
         try:
             if node.kind == 'root':
-                return [fc.Node('/' + a.name, a.name, True, node, 'account', data=a) for a in self.accounts]
+                return [fc.Node('/' + a.key, a.name, True, node, 'account', data=a) for a in self.accounts]
             if node.kind == 'account':
                 return self.folders(node)
             if node.kind == 'folder':
@@ -415,7 +415,7 @@ class Mail(fc.Provider):
         headers, attach, body = compose.parse(path)
         to = headers.get('To') or headers.get('Cc') or headers.get('Bcc') or 'nobody'
         extra = f', {len(attach)} attached' if attach else ''
-        account_node = '/' + a.name
+        account_node = '/' + a.key
 
         def done(k):
             if k == 'y':

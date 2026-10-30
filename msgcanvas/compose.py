@@ -45,7 +45,7 @@ def mailbox(account):
 
 def new(account, to='', subject='', body='', extra=()):
     """A draft file for `account`, its path."""
-    d = os.path.join(DRAFTS, account.name)
+    d = os.path.join(DRAFTS, account.key)
     os.makedirs(d, exist_ok=True)
     path = os.path.join(d, time.strftime('%Y%m%d-%H%M%S') + f'-{os.getpid()}-{len(os.listdir(d))}.eml')
     head = [f'From: {mailbox(account)}', f'To: {to}', 'Cc: ', 'Bcc: ', f'Subject: {subject}']
@@ -184,7 +184,7 @@ def send(path, account):
     """Send the draft from `account`, keep a copy in its Sent folder and drop the draft. What it
     was sent to."""
     msg = build(path)
-    cmd = SEND or ['msmtp', '-C', accounts.MSMTPRC, '-a', account.name, '--read-envelope-from', '-t']
+    cmd = SEND or ['msmtp', '-C', accounts.MSMTPRC, '-a', account.key, '--read-envelope-from', '-t']
     done = subprocess.run(cmd, input=msg.as_bytes(), capture_output=True, timeout=120)
     if done.returncode:
         why = (done.stderr or done.stdout).decode(errors='replace').strip().split('\n')[-1]
@@ -214,7 +214,7 @@ def file_sent(msg, account):
 
 def drafts(account):
     """The account's unsent drafts, newest first."""
-    d = os.path.join(DRAFTS, account.name)
+    d = os.path.join(DRAFTS, account.key)
     try:
         return sorted((os.path.join(d, f) for f in os.listdir(d) if f.endswith('.eml')), reverse=True)
     except OSError:

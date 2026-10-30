@@ -28,7 +28,9 @@ def configured():
 
 
 def login(name, paste=False):
-    found = {a.name: a for a in configured()}
+    found = {}
+    for a in configured():                  # by its name or its key
+        found[a.name] = found[a.key] = a
     if name not in found:
         sys.exit(f"msgcanvas: no account {name!r} (accounts: {', '.join(found) or 'none'})")
     a = found[name]
@@ -58,7 +60,7 @@ def login(name, paste=False):
     what = {'gmail': 'app password (myaccount.google.com/apppasswords)',
             'yahoo': 'app password (login.yahoo.com/account/security: "Generate app password")'}.get(a.type, 'password')
     print(f'The {what} for {a.address}:')
-    sys.exit(subprocess.call(['pass', 'insert', 'mail/' + a.name]))
+    sys.exit(subprocess.call(['pass', 'insert', 'mail/' + a.key]))
 
 
 def import_thunderbird():
@@ -95,9 +97,13 @@ def import_thunderbird():
 
 
 def sync(name=None):
-    configured()
+    found = {}
+    for a in configured():                  # by its name or its key; mbsync knows it by its key
+        found[a.name] = found[a.key] = a
+    if name and name not in found:
+        sys.exit(f"msgcanvas: no account {name!r}")
     need('mbsync', 'notmuch')
-    status = subprocess.call(['mbsync', '-c', accounts.MBSYNCRC, name or '-a'])
+    status = subprocess.call(['mbsync', '-c', accounts.MBSYNCRC, found[name].key if name else '-a'])
     indexed = subprocess.call(['notmuch', 'new'])
     sys.exit(status or indexed)
 

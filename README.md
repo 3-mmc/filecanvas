@@ -32,6 +32,10 @@ The configs it makes live in `~/.config/msgcanvas/` and are handed to each tool,
 | `yahoo` | an app password (login.yahoo.com/account/security) | |
 | `imap` | a password | give `imap_host` and `smtp_host` |
 
+An account's `name` is what's shown, anything (its address, say). Its `key` is what its mail
+folder (`~/Mail/<key>`), password (`pass`: `mail/<key>`) and token are filed under; it's made from
+the name if you leave it out, so give one before renaming an account that already has mail.
+
 `max_messages` (2000 by default) is how many of each folder's newest messages are kept here; the
 server keeps everything. `0` keeps it all.
 

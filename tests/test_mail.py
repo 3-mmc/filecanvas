@@ -124,12 +124,38 @@ class Configs(unittest.TestCase):
         self.assertIn('other_email=a@uni.example;a@seznam.cz', nm)
 
     def test_bad_accounts_say_why(self):
-        for entry, why in ((dict(name='Bad Name', address='a@b'), 'lower-case'),
+        for entry, why in ((dict(name='x', key='Bad Key', address='a@b'), 'lower-case'),
+                           (dict(name='  ', address='a@b'), 'needs a name'),
                            (dict(name='x', address='nope'), 'no address'),
                            (dict(name='x', address='a@b', type='imap'), 'imap_host'),
                            (dict(name='x', address='a@b', type='pop'), "isn't one of")):
             with self.assertRaisesRegex(ValueError, why):
                 accounts.Account(entry, {})
+
+    def test_a_name_is_shown_and_a_key_files_it(self):
+        a = accounts.Account(dict(name='aaron@gmail.com', address='aaron@gmail.com', type='gmail'), {'maildir': '/m'})
+        self.assertEqual((a.name, a.key, a.maildir), ('aaron@gmail.com', 'aaron-gmail-com', '/m/aaron-gmail-com'))
+        b = accounts.Account(dict(name='Uni mail', key='lse', address='x@uni.ac.uk', type='outlook'), {'maildir': '/m'})
+        self.assertEqual((b.key, b.maildir, b.token.endswith('/tokens/lse.gpg')), ('lse', '/m/lse', True))
+        self.assertIn('mail/aaron-gmail-com', a.secret())
+        made = accounts.mbsyncrc([a, b]) + accounts.msmtprc([a, b], '/log')
+        self.assertIn('IMAPAccount lse', made)
+        self.assertIn('account aaron-gmail-com', made)
+        self.assertNotIn('@gmail.com-far', made)                 # names never reach the configs
+        toml("""
+            [[account]]
+            name = "a@x.org"
+            key = "same"
+            address = "a@x.org"
+            type = "seznam"
+            [[account]]
+            name = "b@x.org"
+            key = "same"
+            address = "b@x.org"
+            type = "seznam"
+            """)
+        with self.assertRaisesRegex(ValueError, 'two accounts have this key'):
+            accounts.load()
 
     def test_never_over_someone_elses_file(self):
         path = os.path.join(TMP, 'theirs')
