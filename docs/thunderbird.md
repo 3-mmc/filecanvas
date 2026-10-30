@@ -45,13 +45,28 @@ It does not independently synchronize every folder with the provider.
 Setup compares every Thunderbird identity's email address with existing `msgcanvas` mail
 accounts, ignoring address case. Matches are skipped by default;
 your existing account configuration, authentication and mail storage remain in use.
-`accounts` identifies overlaps before you connect.
+`accounts` identifies overlaps before you connect. Local Folders is not selected automatically;
+choose its account ID explicitly if you want it.
 
 To select particular Thunderbird account IDs (shown by `accounts`):
 
 ```sh
 twigs thunderbird connect --account account2 --account account4
 ```
+
+To use Thunderbird as the source for an overlapping mailbox, avoiding a duplicate empty manual
+view or a second OAuth setup:
+
+```sh
+twigs thunderbird connect --account account6 --prefer-thunderbird
+```
+
+This hides the matching manual mail entry from the Emails branch and excludes it from
+`twigs msg sync`. The original accounts.toml, credentials and local mail are preserved.
+A named manual sync points you to Thunderbird rather than attempting its separate login.
+Other manual accounts keep their existing source. To restore both views, reconnect with
+`--include-existing`. Each connect command replaces the selected Thunderbird account IDs;
+repeat `--account` for every account you want to keep connected. No Thunderbird autostart is added.
 
 To deliberately show an overlapping account through Thunderbird as well:
 
@@ -60,7 +75,7 @@ twigs thunderbird connect --account account2 --include-existing
 ```
 
 This creates a second view of the mailbox; it does not migrate or disable the original source.
-Without that explicit option, overlap detection also runs when loading the canvas, so adding
+Without either source-selection option, overlap detection also runs when loading the canvas, so adding
 an account to another Twigs mail source later hides its Thunderbird duplicate. Address matching
 does not guess Gmail dot aliases or `+` aliases. Account identities should be accurate in
 Thunderbird. The extension's account restrictions remain the access boundary; Twigs selection

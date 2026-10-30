@@ -61,8 +61,7 @@ class Thunderbird(fc.Provider):
                     self.client = self.client_factory(self.config)
                 if node.kind == 'tb-root':
                     accounts = self.client.call('listAccounts')
-                    selected, _ = settings.choose(accounts, self.config['accounts'],
-                        self.config.get('include_existing', False))
+                    selected, _ = settings.selection(accounts, self.config)
                     data = [a for a in accounts if a['id'] in selected and a['id'] in self.config['accounts']]
                 elif node.kind == 'tb-account':
                     data = folder_tree(self.client.call('listFolders', dict(accountId=node.data['id'], format='objects')))

@@ -23,6 +23,12 @@ def load():
     for key in ('node', 'connection_file'):
         if key in data and (not isinstance(data[key], str) or not data[key].strip()):
             raise ValueError('Invalid Thunderbird '+key+' setting')
+    preferred = data.get('preferred_accounts', {})
+    if not isinstance(preferred, dict) or any(
+        not isinstance(k, str) or not isinstance(v, list) or not all(isinstance(a, str) for a in v)
+        for k, v in preferred.items()
+    ):
+        raise ValueError('Invalid Thunderbird source preferences')
     return data
 
 
@@ -60,7 +66,27 @@ def choose(accounts, requested=None, include_existing=False, addresses=None):
         unknown = set(requested) - available.keys()
         if unknown:
             raise ValueError('Unknown Thunderbird account IDs: ' + ', '.join(sorted(unknown)))
-    candidates = [a for a in accounts if not requested or a['id'] in requested]
+    candidates = [a for a in accounts if (a['id'] in requested if requested else a.get('type') != 'none')]
     skipped = [a for a in candidates if overlapping(a, addresses) and not include_existing]
     selected = [a['id'] for a in candidates if a not in skipped]
     return selected, skipped
+
+
+def preferred_addresses(config=None):
+    """Addresses explicitly routed through selected Thunderbird accounts, without touching mail config."""
+    config = load() if config is None else config
+    if not config:
+        return set()
+    return {address.casefold().strip()
+            for ident, addresses in config.get('preferred_accounts', {}).items()
+            if ident in config['accounts'] for address in addresses}
+
+
+def manual_accounts(accounts):
+    preferred = preferred_addresses()
+    return [a for a in accounts if a.address.casefold().strip() not in preferred] if preferred else list(accounts)
+
+
+def selection(accounts, config):
+    return choose(accounts, config['accounts'],
+                  config.get('include_existing', False) or bool(config.get('preferred_accounts')))

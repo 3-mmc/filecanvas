@@ -110,8 +110,17 @@ def sync(name=None):
         found[a.name] = found[a.key] = a
     if name and name not in found:
         sys.exit(f"msgcanvas: no account {name!r}")
+    from twigs.apps.thunderbird import settings as thunderbird
+    preferred = thunderbird.preferred_addresses()
+    if name and found[name].address.casefold().strip() in preferred:
+        sys.exit(f'msgcanvas: {found[name].address} uses Thunderbird. Open `twigs thunderbird`; '
+                 '`twigs thunderbird sync` checks its connection. No separate msgcanvas OAuth login is needed.')
+    selected = [found[name]] if name else thunderbird.manual_accounts(list({a.key: a for a in found.values()}.values()))
+    if not selected:
+        print('No manual mail accounts to sync; use `twigs thunderbird` for connected Thunderbird accounts.')
+        return
     need('mbsync', 'notmuch')
-    status = subprocess.call(['mbsync', '-c', accounts.MBSYNCRC, found[name].key if name else '-a'])
+    status = subprocess.call(['mbsync', '-c', accounts.MBSYNCRC] + [a.key for a in selected])
     indexed = subprocess.call(['notmuch', 'new'])
     sys.exit(status or indexed)
 
@@ -138,7 +147,8 @@ def sections():
     from . import chat
     out = []
     if os.path.exists(accounts.NOTMUCH):
-        found = configured()
+        from twigs.apps.thunderbird import settings as thunderbird
+        found = thunderbird.manual_accounts(configured())
         if found:
             try:
                 from . import mail

@@ -173,3 +173,65 @@ def test_doctor_checks_runtime_without_reading_a_thunderbird_session(version,ok)
          patch.object(doctor.subprocess,'run',return_value=subprocess.CompletedProcess([],0,version,'')):
         report=doctor.diagnose(['thunderbird'],'ubuntu',command=lambda n:'/test/node.exe')
     assert next(c['ok'] for c in report['checks'] if c['name']=='Node.js 18+') is ok
+
+
+def test_preferred_thunderbird_source_hides_manual_duplicate_but_preserves_config():
+    from types import SimpleNamespace
+    existing=SimpleNamespace(address='Reader@Example.test',key='reader')
+    other=SimpleNamespace(address='other@example.test',key='other')
+    config=dict(accounts=['a1'],include_existing=False,
+                preferred_accounts={'a1':['reader@example.test'],'not-selected':['other@example.test']})
+    with patch.object(settings,'load',return_value=config), \
+         patch.object(settings,'existing_addresses',return_value={'reader@example.test'}):
+        assert settings.selection(ACCOUNTS,config)[0]==['a1']
+        assert settings.manual_accounts([existing,other])==[other]
+    assert existing.address=='Reader@Example.test'
+
+
+def test_local_folders_are_explicit_instead_of_the_only_default_connection():
+    local=dict(id='local',name='Local Folders',type='none',identities=[])
+    assert settings.choose(ACCOUNTS+[local],addresses={'reader@example.test','other@example.test'})[0]==[]
+    assert settings.choose([local],requested=['local'],addresses=set())[0]==['local']
+
+
+def test_sync_of_thunderbird_preferred_account_never_calls_oauth_or_mbsync():
+    from types import SimpleNamespace
+    from twigs.apps.msg import cli
+    account=SimpleNamespace(name='Reader',key='reader',address='reader@example.test')
+    with patch.object(cli,'configured',return_value=[account]), \
+         patch.object(settings,'preferred_addresses',return_value={'reader@example.test'}), \
+         patch.object(cli.subprocess,'call') as call:
+        with pytest.raises(SystemExit,match='uses Thunderbird'):
+            cli.sync('Reader')
+        call.assert_not_called()
+
+
+def test_sync_all_runs_only_manual_accounts_and_propagates_failure():
+    from types import SimpleNamespace
+    from twigs.apps.msg import cli
+    aa=[SimpleNamespace(name='Reader',key='reader',address='reader@example.test'),
+        SimpleNamespace(name='Other',key='other',address='other@example.test')]
+    with patch.object(cli,'configured',return_value=aa), \
+         patch.object(settings,'preferred_addresses',return_value={'reader@example.test'}), \
+         patch.object(cli,'need'), \
+         patch.object(cli.subprocess,'call',side_effect=[1,0]) as call:
+        with pytest.raises(SystemExit) as result:cli.sync()
+        assert result.value.code==1
+        assert call.call_args_list[0].args[0]==['mbsync','-c',cli.accounts.MBSYNCRC,'other']
+
+
+def test_connect_preference_is_saved_from_live_identities_without_creating_manual_accounts(capsys):
+    from twigs.apps.thunderbird import cli
+    class Live(Fixture):
+        def __enter__(self):return self
+        def __exit__(self,*args):self.close()
+    with patch.object(cli,'Client',Live), \
+         patch.object(settings,'load',return_value=None), \
+         patch.object(settings,'existing_addresses',return_value={'reader@example.test'}), \
+         patch.object(settings,'save') as save, \
+         patch('twigs.kit.apps.keep'):
+        cli.main(['connect','--account','a1','--prefer-thunderbird'])
+        config=save.call_args.args[0]
+        assert config['accounts']==['a1']
+        assert config['preferred_accounts']=={'a1':['reader@example.test']}
+        assert config['include_existing'] is False
