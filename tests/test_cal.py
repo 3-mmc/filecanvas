@@ -91,10 +91,10 @@ class Canvas(unittest.TestCase):
         self.assertEqual(self.c.focus.path, f'{cal.ROOT}/2026-10/2026-10-30')
         month = self.c.focus.parent
         self.assertEqual([k.name for k in month.shown()],
-                         ['Thu 15  Appt with Dr Ng', 'Sat 24–Sat 31  Tomasz in London', 'Fri 30  today',
-                          "Sat 31  Maria's Halloween or Petra's birthday"])
+                         ['15 Thu  Appt with Dr Ng', '24 Sat → 31 Sat  Tomasz in London', '30 Fri  today',
+                          "31 Sat  21:00 Maria's Halloween or Petra's birthday"])
         self.assertEqual(self.p.count(month.shown()[0]), ('11:00', 'stub', False))
-        self.assertEqual(self.p.count(month.shown()[1]), ('8 days', 'stub', False))
+        self.assertEqual(self.p.count(month.shown()[1]), ('day 7 of 8', cal.SOON_COLOUR, True))   # you're in it
         self.assertEqual(self.p.count(month), ('3', 'stub', False))   # today, empty, isn't one
         s = self.screen()
         self.assertIn('1 to decide', s)
@@ -112,7 +112,7 @@ class Canvas(unittest.TestCase):
             self.assertEqual(json.load(f)['days']['2026-10-31']['kept'], 'ev:maria')
         self.assertIn("kept Maria's Halloween", self.screen())
         self.assertNotIn('to decide', self.screen())
-        self.assertEqual(self.c.focus.parent.name, "Sat 31  Maria's Halloween")   # the day says what you'll do
+        self.assertEqual(self.c.focus.parent.name, "31 Sat  21:00 Maria's Halloween")   # the day says what you'll do
         self.press('\x0b')
         self.assertIsNone(self.p.kept(dt.date(2026, 10, 31), maria.data['alts']))
 
@@ -121,7 +121,7 @@ class Canvas(unittest.TestCase):
         self.type('call Dad')
         self.screen()
         today = self.c.focus
-        self.assertEqual(today.name, 'Fri 30  keep the day free or call Dad')
+        self.assertEqual(today.name, '30 Fri  keep the day free or call Dad')
         self.press('right')
         free, plan = today.shown()
         self.assertEqual((free.name, plan.name, self.p.mark(plan)), ('keep the day free', 'call Dad',
@@ -139,7 +139,7 @@ class Canvas(unittest.TestCase):
         self.screen()
         day = self.c.focus
         self.assertEqual(self.p.fork_of(day)[0][2].title, 'Appt with Dr Ng')
-        self.assertEqual(day.name, 'Thu 15  Appt with Dr Ng or lunch with Mum')
+        self.assertEqual(day.name, '15 Thu  Appt with Dr Ng or lunch with Mum')
 
     def test_what_if_from_a_month_takes_the_day_first(self):
         self.press('left', 'down', '\x17')
@@ -147,8 +147,45 @@ class Canvas(unittest.TestCase):
         self.screen()
         nov = self.c.focus
         day = next(k for k in nov.shown() if k.data.get('day') == dt.date(2026, 11, 23))
-        self.assertEqual(day.name, 'Mon 23  Flight  +1')        # the flight, then the fork
+        self.assertEqual(day.name, '23 Mon  Flight  +1')        # the flight, then the fork
         self.assertEqual([self.p.label(k) for k in self.p.children(day)], ['Flight', 'as it is or drive instead'])
+
+    def test_close_things_put_their_time_first_and_say_how_long(self):
+        self.press('down', 'right')
+        maria, petra = self.c.focus.parent.shown()
+        self.assertEqual((maria.name, petra.name), ("21:00 Maria's Halloween", "22:00 Petra's birthday"))
+        self.assertEqual(self.p.count(maria), ('tomorrow', cal.SOON_COLOUR, True))
+        self.assertEqual(self.p.tint(maria), [(5, cal.SOON_COLOUR, True)])
+        day = self.c.focus.parent
+        self.assertEqual(self.p.tint(day)[-1], (5, cal.SOON_COLOUR, True))      # after the day's number and name
+        self.assertEqual(self.p.count(day), ('tomorrow', cal.SOON_COLOUR, True))
+        drng = self.c.focus.parent.parent.shown()[0]
+        self.assertEqual((drng.name, self.p.count(drng)), ('15 Thu  Appt with Dr Ng', ('11:00', 'stub', False)))
+        later = cal.Calendar(os.path.join(self.home, 'calendars'), self.plans, watch=0,
+                             now=dt.datetime(2026, 10, 31, 20, 30, tzinfo=NY))
+        self.assertEqual(later.soon(later.by_day[dt.date(2026, 10, 31)][0]), 'in 30m')
+
+    def test_a_span_is_an_era_holding_what_happens_in_it(self):
+        self.press('up')                # onto Tomasz in London
+        era = self.c.focus
+        self.assertEqual(era.kind, 'span')
+        self.press('right')
+        self.assertEqual([k.name for k in era.shown()],
+                         ['Sat 24 Oct → Sat 31 Oct, 8 days', '30 Fri  today',
+                          "31 Sat  21:00 Maria's Halloween or Petra's birthday"])
+        self.assertEqual(self.c.focus.name, '30 Fri  today')             # on what's next in it
+        self.press('down', 'right', '\x0b')                            # a fork kept in the era…
+        self.screen()
+        month = era.parent
+        self.assertEqual(month.shown()[-1].name, "31 Sat  21:00 Maria's Halloween")   # …is kept in the month
+
+    def test_each_week_a_shade_of_its_months_colour(self):
+        oct_ = [cal.shade(dt.date(2026, 10, d)) for d in (1, 5, 12, 19, 26)]
+        self.assertEqual(len(set(oct_)), 5)                              # every week its own
+        self.assertEqual(cal.shade(dt.date(2026, 10, 5)), cal.shade(dt.date(2026, 10, 11)))   # Monday to Sunday
+        self.assertEqual(cal.shade(dt.date(2026, 10, 1)), cal.MONTHS[10])
+        h = lambda c: __import__('colorsys').rgb_to_hls(*(int(c[i:i + 2], 16) / 255 for i in (1, 3, 5)))[0]
+        self.assertTrue(all(abs(h(c) - h(cal.MONTHS[10])) < 0.02 for c in oct_))     # all orange
 
 
 if __name__ == '__main__':

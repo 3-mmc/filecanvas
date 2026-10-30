@@ -59,6 +59,9 @@ class Together(fc.Provider):
             return node.data
         return self.ask('preview', node, None)
 
+    def tint(self, node):
+        return self.ask('tint', node, [])
+
     def mark_before(self, node):
         return self.ask('mark_before', node, False)
 

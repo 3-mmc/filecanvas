@@ -9,7 +9,7 @@ only (state: whatif.json): nothing is written to a calendar.
 
 Repeating events: FREQ with INTERVAL, COUNT, UNTIL, EXDATE and moved occurrences; BYDAY and the
 other BY… parts aren't read yet (an event repeats on its first day's weekday, date)."""
-import datetime as dt, json, os, re, threading, time, uuid, zlib
+import colorsys, datetime as dt, json, os, re, threading, time, uuid, zlib
 from zoneinfo import ZoneInfo
 
 from . import accounts, treecanvas as fc
@@ -18,6 +18,12 @@ CALENDARS = os.path.join(accounts.DATA, 'calendars')
 NOTE_WIDTH = 60
 NOTE_MAX = 700          # characters of a description shown; a long invitation's start
 ROOT = '@cal'
+# Each month its colour, each of its weeks a shade of it: a day's number and weekday wear them
+MONTHS = {1: '#7fb2e5', 2: '#a08bd6', 3: '#5fbf8a', 4: '#9fd36b', 5: '#e0d45a', 6: '#f2b33d',
+          7: '#e5735c', 8: '#e05a87', 9: '#c9a227', 10: '#ff8c2a', 11: '#b5835a', 12: '#5ab6c9'}
+SHADES = (0.0, 0.14, -0.1, 0.2, -0.16, 0.07)     # lightness, week by week: neighbours apart
+SOON = dt.timedelta(days=2)     # closer than this, an event's time comes first
+SOON_COLOUR = 'sel_bg'
 DAY = dt.timedelta(days=1)
 # the lines mail-made events carry, which say nothing about the event
 BOILERPLATE = ('g.co/calendar', 'extsrc=cal')
@@ -270,17 +276,45 @@ class Calendar(fc.Provider):
     answers for."""
     KINDS = ('calendar', 'month', 'day', 'span', 'event', 'fork', 'alt', 'step', 'detail')
 
-    def __init__(self, folder=CALENDARS, plans=None, today=None, watch=2.0, zone=None):
+    def __init__(self, folder=CALENDARS, plans=None, today=None, watch=2.0, zone=None, now=None):
         self.folder, self.zone = folder, zone or local_zone()
-        self.fixed_today = today
+        self.fixed_now = now or (dt.datetime.combine(today, dt.time(12), self.zone) if today else None)
         self.plans = Plans(plans)
         self.lock = threading.Lock()
+        self.shown_days, self.shown_spans = {}, {}   # where each day and era is on the canvas, by path
         self.load()
         if watch:
             threading.Thread(target=self.watch, args=(watch,), daemon=True).start()
 
+    def now(self):
+        return self.fixed_now or dt.datetime.now(self.zone)
+
     def today(self):
-        return self.fixed_today or dt.datetime.now(self.zone).date()
+        return self.now().date()
+
+    def soon(self, e):
+        """How long until `e`, when it's close ('in 3h', 'tomorrow', 'now'); None when it isn't."""
+        now = self.now()
+        if all_day(e.start):
+            days = (e.first - now.date()).days
+            return 'today' if e.first <= now.date() <= e.last else 'tomorrow' if days == 1 else \
+                'in 2 days' if days == 2 else None
+        if e.start <= now < e.end:
+            return 'now'
+        left = e.start - now
+        if not dt.timedelta() <= left <= SOON:
+            return None
+        days = (e.first - now.date()).days
+        if left < dt.timedelta(hours=1):
+            return f'in {max(1, left.seconds // 60)}m'
+        return f'in {left.seconds // 3600}h' if days == 0 else 'tomorrow' if days == 1 else f'in {days} days'
+
+    def title(self, e):
+        """An event's name, its time first when it's close."""
+        return f'{e.at()} {e.title}' if e.at() and self.soon(e) else e.title
+
+    def leads(self, e):
+        return bool(e and not all_day(e.start) and self.soon(e))
 
     def loading(self):
         n = len(self.names)
@@ -294,7 +328,7 @@ class Calendar(fc.Provider):
                     sig.append((f, os.stat(f).st_mtime_ns))
                 except OSError:
                     pass
-        return sig, self.today()
+        return sig, self.now().replace(minute=0, second=0, microsecond=0)    # hourly: what's close moves
 
     def watch(self, every):
         seen = self.signature()
@@ -374,17 +408,38 @@ class Calendar(fc.Provider):
         return out
 
     def month_rows(self, m):
-        """The month's rows: ('span', Event) for what runs over days, ('day', date, items)."""
-        end = add_months(m, 1)
-        rows = [((max(s.first, m), 0), ('span', s)) for s in self.spans if s.first < end and s.last >= m]
-        days = {d for d in self.by_day if m <= d < end} | \
-            {d for d in map(dt.date.fromisoformat, self.plans.days) if m <= d < end}
+        return self.rows(m, add_months(m, 1))
+
+    def rows(self, lo, end, era=None):
+        """The rows from `lo` until `end`: ('span', Event) for what runs over days, ('day', date,
+        items). In an era (a span), the spans that start within it."""
+        spans = [s for s in self.spans if s.uid != era.uid and lo <= s.first < end] if era else \
+            [s for s in self.spans if s.first < end and s.last >= lo]
+        rows = [((max(s.first, lo), 0), ('span', s)) for s in spans]
+        days = {d for d in self.by_day if lo <= d < end} | \
+            {d for d in map(dt.date.fromisoformat, self.plans.days) if lo <= d < end}
         today = self.today()
-        if m <= today < end:
+        if lo <= today < end:
             days.add(today)
         for d in days:
             rows.append(((d, 1), ('day', d, self.items(d))))
         return [r for _, r in sorted(rows, key=lambda r: r[0])]
+
+    def row_nodes(self, parent, rows):
+        out = []
+        for row in rows:
+            if row[0] == 'span':
+                e = row[1]
+                n = fc.Node(f'{parent.path}/s:{e.uid}', f'{span_dates(e)}  {e.title}', True, parent, 'span',
+                            data={'event': e})
+                self.shown_spans[n.path] = e
+            else:
+                _, day, items = row
+                n = fc.Node(f'{parent.path}/{day}', self.day_label(day, items), bool(items), parent, 'day',
+                            data={'day': day, 'items': items, 'lead': self.day_leads(day, items)})
+                self.shown_days.setdefault(day, set()).add(n.path)
+            out.append(n)
+        return out
 
     # -- the tree
     def root(self):
@@ -399,17 +454,10 @@ class Calendar(fc.Provider):
                 return [fc.Node(f'{ROOT}/{m:%Y-%m}', month_name(m, self.today()), True, node, 'month',
                                 data={'month': m}) for m in self.months()]
             if k == 'month':
-                out = []
-                for row in self.month_rows(d['month']):
-                    if row[0] == 'span':
-                        e = row[1]
-                        out.append(fc.Node(f'{node.path}/s:{e.uid}', f'{span_dates(e)}  {e.title}', True, node,
-                                           'span', data={'event': e}))
-                    else:
-                        _, day, items = row
-                        out.append(fc.Node(f'{node.path}/{day}', self.day_label(day, items), bool(items), node,
-                                           'day', data={'day': day, 'items': items}))
-                return out
+                return self.row_nodes(node, self.month_rows(d['month']))
+            if k == 'span':     # an era: when it is, then what happens in it
+                e = d['event']
+                return self.details(node, e) + self.row_nodes(node, self.rows(e.first, e.last + DAY, e))
             if k == 'day':
                 items = d['items']
                 if len(items) == 1:     # a day with one thing on it is that thing
@@ -418,7 +466,7 @@ class Calendar(fc.Provider):
                 return [self.item(node, d['day'], kind, what) for kind, what in items]
             if k == 'fork':
                 return self.alternatives(node, d['day'], d['alts'])
-            if k in ('span', 'event'):
+            if k == 'event':
                 return self.details(node, d['event'], d.get('day'))
             if k == 'alt':
                 out = self.details(node, d['what'], d['day']) if d['kind'] == 'event' else []
@@ -433,19 +481,21 @@ class Calendar(fc.Provider):
         if kind == 'fork':
             return fc.Node(f'{parent.path}/⑂', self.fork_label(day, what), True, parent, 'fork',
                            data={'day': day, 'alts': what})
-        return fc.Node(f'{parent.path}/{what.uid}', what.title, True, parent, 'event', data={'event': what, 'day': day})
+        return fc.Node(f'{parent.path}/{what.uid}', self.title(what), True, parent, 'event',
+                       data={'event': what, 'day': day, 'lead': self.leads(what)})
 
     def alternatives(self, parent, day, alts):
         out = []
         for aid, kind, what in alts:
             if kind == 'event':
-                name = what.title
+                name = self.title(what)
             elif kind == 'plan':
                 name = what['title']
             else:
                 name = what
             out.append(fc.Node(f'{parent.path}/{aid}', name, kind == 'event' or (kind == 'plan' and bool(what['steps'])),
-                               parent, 'alt', data={'day': day, 'id': aid, 'kind': kind, 'what': what, 'alts': alts}))
+                               parent, 'alt', data={'day': day, 'id': aid, 'kind': kind, 'what': what, 'alts': alts,
+                                                    'lead': kind == 'event' and self.leads(what)}))
         return out
 
     def details(self, parent, e, day=None):
@@ -464,17 +514,51 @@ class Calendar(fc.Provider):
     def fork_label(self, day, alts):
         k = self.kept(day, alts)
         if k:
-            return next(alt_title(a) for a in alts if a[0] == k)
+            a = next(a for a in alts if a[0] == k)
+            return self.title(a[2]) if a[1] == 'event' else alt_title(a)
         room = max(10, 34 // len(alts))      # each its share, so the last isn't lost
-        return ' or '.join(short(alt_title(a), room) for a in alts)
+        lead = self.first_event(alts)
+        return (f'{lead.at()} ' if self.leads(lead) else '') + ' or '.join(short(alt_title(a), room) for a in alts)
+
+    def first_event(self, alts):
+        evs = [a[2] for a in alts if a[1] == 'event']
+        return min(evs, key=lambda e: e.start) if evs else None
+
+    def lead_event(self, day, items):
+        """The event a day's label starts with, if it's timed: an event, or a fork's first."""
+        if not items:
+            return None
+        kind, what = items[0]
+        if kind == 'fork':
+            k = self.kept(day, what)
+            got = next((a for a in what if a[0] == k), None) if k else None
+            return got[2] if got and got[1] == 'event' else None if got else self.first_event(what)
+        return what
+
+    def day_leads(self, day, items):
+        return self.leads(self.lead_event(day, items))
 
     def day_label(self, day, items):
-        head = f'{day:%a} {day.day:>2}'
+        head = f'{day.day:>2} {day:%a}'
         if not items:
             return head + ('  today' if day == self.today() else '')
         kind, what = items[0]
-        first = self.fork_label(day, what) if kind == 'fork' else what.title
+        first = self.fork_label(day, what) if kind == 'fork' else self.title(what)
         return f'{head}  {first}' + (f'  +{len(items) - 1}' if len(items) > 1 else '')
+
+    def tint(self, node):
+        """A day's number and weekday in its month's colour, the shade of its week; a close
+        event's time in the choice's colour; a month's name in its own."""
+        d = node.data or {}
+        if node.kind == 'month':
+            return [(len(node.name), MONTHS[d['month'].month], True)]
+        out = []
+        if node.kind == 'day':
+            c = shade(d['day'])
+            out = [(2, c, True), (4, c, False)] + ([(2, c, False)] if d['lead'] else [])
+        if d.get('lead'):
+            out.append((5, SOON_COLOUR, True))
+        return out
 
     def label(self, node):
         return node.name
@@ -525,12 +609,24 @@ class Calendar(fc.Provider):
             n -= d['month'] <= self.today() < add_months(d['month'], 1) and not self.items(self.today())
             return (str(n), 'stub', False) if n else None
         if node.kind == 'span':
-            return f'{(d["event"].last - d["event"].first).days + 1} days', 'stub', False
-        if node.kind == 'day' and len(d['items']) == 1 and d['items'][0][0] == 'event':
-            at = d['items'][0][1].at()
-            return (at, 'stub', False) if at else None
+            e, today = d['event'], self.today()
+            n = (e.last - e.first).days + 1
+            if e.first <= today <= e.last:          # an era you're in: how far into it
+                return f'day {(today - e.first).days + 1} of {n}', SOON_COLOUR, True
+            return f'{n} days', 'stub', False
+        if node.kind == 'day':
+            evs = [w for k, w in d['items'] if k == 'event'] + \
+                [a[2] for k, w in d['items'] if k == 'fork' for a in w if a[1] == 'event']
+            close = [(e.start if not all_day(e.start) else None, self.soon(e)) for e in evs if self.soon(e)]
+            if close:           # the first thing that's close: how long until it
+                return min(close, key=lambda c: (c[0] is not None, c[0] or 0))[1], SOON_COLOUR, True
+            if len(d['items']) == 1 and d['items'][0][0] == 'event' and d['items'][0][1].at():
+                return d['items'][0][1].at(), 'stub', False
+            return None
         if node.kind == 'event' or (node.kind == 'alt' and d['kind'] == 'event'):
             e = d['event'] if node.kind == 'event' else d['what']
+            if self.soon(e):
+                return self.soon(e), SOON_COLOUR, True
             return (e.at(), 'stub', False) if e.at() else None
         return None
 
@@ -582,6 +678,12 @@ class Calendar(fc.Provider):
         if node.kind == 'month' and d['month'] <= self.today() < add_months(d['month'], 1):
             rows = self.month_rows(d['month'])
             return next((i for i, r in enumerate(rows) if r[0] == 'day' and r[1] >= self.today()), 0)
+        if node.kind == 'span':     # an era: on what's next in it, or its first
+            e = d['event']
+            rows = self.rows(e.first, e.last + DAY, e)
+            head = len(self.details(node, e))
+            return head + next((i for i, r in enumerate(rows) if r[0] == 'day' and r[1] >= self.today()), 0) \
+                if rows else 0
         return 0
 
     def locate(self, start):
@@ -632,13 +734,21 @@ class Calendar(fc.Provider):
             out.append(('\x05', 'rename', '⌃E rename'))
         return out
 
-    def touch(self, node, *also):
-        """What `node` shows has changed: it and every branch above it, up to its month, again."""
+    def touch(self, node, day=None):
+        """What `node` shows has changed: it and every branch above it, up to its month, again;
+        and `day` wherever else it's shown (in its month, in an era), with what holds it."""
         while node is not None and node.kind != 'calendar':
             self.invalidate(node.path)
             node = node.parent
-        for path in also:
+        if day is None:
+            return
+        self.invalidate(f'{ROOT}/{day:%Y-%m}')
+        for path in self.shown_days.get(day, ()):
             self.invalidate(path)
+            self.invalidate(path.rsplit('/', 1)[0])
+        for path, e in self.shown_spans.items():
+            if e.first <= day <= e.last:
+                self.invalidate(path)
 
     def act(self, node, name, canvas):
         d = node.data or {}
@@ -658,7 +768,7 @@ class Calendar(fc.Provider):
                         self.status('drop:' + a[0], short(alt_title(a)), 'gone')
                 canvas.say(f'kept {short(title)} (here only: your calendar is as it was)')
             self.plans.save()
-            self.touch(node.parent)
+            self.touch(node.parent, day)
             self.pulse(node.parent.path)
         elif name == 'then':
             pid = d['what']['id'] if node.kind == 'alt' else d['plan']
@@ -668,19 +778,19 @@ class Calendar(fc.Provider):
                 if text.strip():
                     self.plans.find(day, pid)['steps'].append(text.strip())
                     self.plans.save()
-                    self.touch(target)
+                    self.touch(target, day)
             canvas.ask('then', then)
         elif name == 'rename':
             def rename(text):
                 if text.strip():
                     self.plans.find(day, d['id'])['title'] = text.strip()
                     self.plans.save()
-                    self.touch(node)
+                    self.touch(node, day)
             canvas.ask('what if', rename, text=d['what']['title'])
         elif name == 'drop' and node.kind == 'step':
             self.plans.find(day, d['plan'])['steps'].pop(d['step'])
             self.plans.save()
-            self.touch(node.parent)
+            self.touch(node.parent, day)
         elif name == 'drop':
             def drop(key):
                 if key == 'y':
@@ -689,7 +799,7 @@ class Calendar(fc.Provider):
                     if state['kept'] == d['id']:
                         state['kept'] = None
                     self.plans.save()
-                    self.touch(node.parent)
+                    self.touch(node.parent, day)
                     canvas.say('thrown away')
             canvas.ask(f'throw away "{short(d["what"]["title"])}"?  y yes  n no', drop, choices='yn')
         return None
@@ -709,9 +819,8 @@ class Calendar(fc.Provider):
             state['plans'].append({'id': 'w' + uuid.uuid4().hex[:8], 'title': title,
                                    'instead_of': [instead.uid] if instead else [], 'steps': []})
             self.plans.save()
-            month = f'{ROOT}/{day:%Y-%m}'
-            self.touch(node, month, f'{month}/{day}')
-            self.pulse(f'{month}/{day}')
+            self.touch(node, day)
+            self.pulse(f'{ROOT}/{day:%Y-%m}/{day}')
             canvas.say(f'{day:%a %-d %b} forks: weigh it, then ⌃K keep one')
 
         if node.kind == 'month':
@@ -749,8 +858,17 @@ def month_name(m, today):
 
 def span_dates(e):
     a, b = e.first, e.last
-    return f'{a:%a} {a.day}–{b:%a} {b.day}' if (a.year, a.month) == (b.year, b.month) else \
-        f'{a:%b} {a.day}–{b:%b} {b.day}'
+    return f'{a.day:>2} {a:%a} → {b.day} {b:%a}' if (a.year, a.month) == (b.year, b.month) else \
+        f'{a.day:>2} {a:%b} → {b.day} {b:%b}'
+
+
+def shade(day):
+    """`day`'s colour: its month's, lighter or darker by its week (weeks start on Monday)."""
+    week = (day.day - 1 + day.replace(day=1).weekday()) // 7
+    base = MONTHS[day.month]
+    h, l, s = colorsys.rgb_to_hls(*(int(base[i:i + 2], 16) / 255 for i in (1, 3, 5)))
+    r, g, b = colorsys.hls_to_rgb(h, min(0.85, max(0.3, l + SHADES[week])), s)
+    return f'#{round(r * 255):02x}{round(g * 255):02x}{round(b * 255):02x}'
 
 
 def when_text(e):

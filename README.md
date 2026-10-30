@@ -50,10 +50,15 @@ Passwords are `pass` entries (`mail/<name>`); OAuth tokens are gpg-encrypted fil
 ## Calendar
 
 Your calendar beside mail and chats (or alone: `msgcanvas cal [YYYY-MM]`), opening on this month
-at today. Months branch into what's on them: a day with one thing is that thing (its time in a
-column of their own), a day with more opens into them, and what runs over days (a trip, a visit)
-is a bar in its own colour among the days it starts on. Each thing opens onto when, where, and
-what it says.
+at today. Months branch into what's on them, each day as `30 Fri  …`: its number and weekday in
+its month's colour (October orange, December teal…), each week a shade of it. A day with one
+thing is that thing (its time in a column of their own), a day with more opens into them. Each
+thing opens onto when, where, and what it says. Within two days, a thing's time moves to the front
+and the column says how long until it (`in 3h`, `tomorrow`, `now`).
+
+What runs over days (a trip, a visit) is a bar in its own colour among the days it starts on, and
+an era: it opens onto what happens within it, eras inside it too, and while you're in one it says
+how far (`day 7 of 8`).
 
 **What-ifs.** Where two things on a day overlap, the day forks (⑂) into them, and the bar counts
 what's still to decide. **⌃W** asks "what if…" anywhere: on a day it weighs your idea against

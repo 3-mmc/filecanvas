@@ -1,4 +1,4 @@
-# Vendored from treecanvas (github.com/3-mmc/treecanvas) at a662a64: do not edit here.
+# Vendored from treecanvas (github.com/3-mmc/treecanvas) at c6d214e: do not edit here.
 # Change it there and run tools/vendor-treecanvas.py; msgcanvas's own choices are in its providers.
 """treecanvas: a tree as one canvas you move across; the file system, unless you give it another.
 (It was filecanvas: the file system is still what it shows by default.)
@@ -635,6 +635,12 @@ class Provider:
         """A number for `node` (unread mail, say), (text, colour, bold): the column of them is
         right-aligned after the column's names, so they line up to be read down. None for none."""
         return None
+
+    def tint(self, node):
+        """The start of `node`'s label in colours of its own: [(how many characters, colour, bold)],
+        in order from its first (a date's day and weekday, a time); [] for the label's own colour.
+        A colour is a theme role or a colour ('#ff8c2a', 208). Not on the choice or a chip."""
+        return []
 
     def mark_before(self, node):
         """Whether `node`'s mark goes before its label (a task's ✓), not after (a file's git ●).
@@ -1318,6 +1324,11 @@ class Canvas:
                                  1 - (1 - s) * t, True)
                 for i, l in enumerate(lines):
                     put(x, n.row + i, l, style)
+                at, i = x, 0     # the label's start, over again in the provider's colours
+                for count, c, bold in [] if isinstance(n, Stub) else self.source.tint(n):
+                    part, i = text[i:i + count], i + count
+                    put(at, n.row, part, P.fg(c, s, bold))
+                    at += cells(part)
                 cur = x + cells(text)
             if mark and id(n) in before:
                 role, glyph, ascii_ = mark
