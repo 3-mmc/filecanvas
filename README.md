@@ -84,3 +84,5 @@ for its file canvas.
 python3 -m unittest                                              # from here: a private home, never yours
 uv run --extra test pytest                                      # tasks included; mail checks skip if unavailable
 ```
+
+Optional [Thunderbird mail](docs/thunderbird.md) reuses your configured accounts.

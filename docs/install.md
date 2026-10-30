@@ -28,12 +28,14 @@ twigs doctor
 twigs doctor mail
 twigs doctor chat
 twigs doctor oauth
+twigs doctor thunderbird
 twigs doctor --platform macos
 twigs doctor --platform arch --json
 ```
 
 Doctor is read-only: it checks commands, imports the mail binding, tests an in-memory SQLite
-snapshot, and checks whether an installed nchat advertises `--serve`. It does not log in, print
+snapshot, checks whether an installed nchat advertises `--serve`, and checks Node's version for
+optional browser mail. It does not inspect browser sessions, log in, print
 credentials, install packages, or open your task database. Plain `doctor` reports optional
 missing features without failing; selecting a feature gives a nonzero exit status if that
 feature or the base runtime is unavailable. `--platform` changes guidance, not the runtime checks.
@@ -94,6 +96,14 @@ claim that every protocol was compiled into that binary.
 
 `chafa` is optional for image previews: install it with apt, pacman, or brew.
 Linux and macOS are supported; use WSL on Windows.
+
+## Thunderbird accounts
+
+The optional `thunderbird` twig connects to a running Thunderbird with the Thunderbird MCP
+extension installed. It bundles the Node bridge, requires Node.js 18+, and needs no additional
+Python packages or separate provider login. Use `twigs doctor thunderbird` and follow
+[Thunderbird setup](thunderbird.md), including overlap detection, Windows/WSL setup and the
+headless CPU troubleshooting note.
 
 ## Building and checking a release
 

@@ -23,5 +23,7 @@ def open(sections, start='', intro=True, **look):
         return fc.pick(start, provider=providers[0] if len(providers) == 1 else together.Together(sections), **look)
     finally:
         for p in providers:
-            if getattr(p, 'serve', None) is not None:
+            if callable(getattr(p, 'close', None)):
+                p.close()
+            elif getattr(p, 'serve', None) is not None:
                 p.serve.close()

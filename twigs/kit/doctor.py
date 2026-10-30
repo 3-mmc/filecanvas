@@ -15,20 +15,23 @@ RECIPES = {
         'mail': 'sudo apt install isync notmuch python3-notmuch2 msmtp pass gnupg',
         'oauth': 'sudo apt install neomutt libsasl2-modules-kdexoauth2',
         'media': 'sudo apt install chafa',
+        'thunderbird': 'Install Thunderbird with its MCP extension, and Node.js 18+. See docs/thunderbird.md.',
     },
     'arch': {
         'mail': 'sudo pacman -S isync notmuch python-cffi msmtp pass gnupg',
         'oauth': 'sudo pacman -S neomutt; ensure your SASL plugins provide XOAUTH2 for mbsync',
         'media': 'sudo pacman -S chafa',
+        'thunderbird': 'sudo pacman -S thunderbird nodejs; install the Thunderbird MCP extension.',
     },
     'macos': {
         'mail': 'brew install isync notmuch msmtp pass gnupg',
         'oauth': 'brew install neomutt; locate mutt_oauth2.py and set TWIGS_OAUTH_HELPER to its path',
         'media': 'brew install chafa',
+        'thunderbird': 'brew install --cask thunderbird; brew install node; install the Thunderbird MCP extension.',
     },
 }
 RECIPES['debian'] = RECIPES['ubuntu']
-FEATURES = ('base', 'files', 'cal', 'tasks', 'mail', 'chat', 'oauth', 'media')
+FEATURES = ('base', 'files', 'cal', 'tasks', 'mail', 'chat', 'oauth', 'media', 'thunderbird')
 
 
 def detect(system=None, release=None):
@@ -122,6 +125,23 @@ def diagnose(features=None, where=None, command=None, module=None, probe=True):
             '\nAlternatively set TWIGS_OAUTH_HELPER to your downloaded NeoMutt helper. Never paste tokens into doctor.')
     if 'media' in selected:
         add('media', 'chafa (optional image previews)', command('chafa'), recipe(where, 'media'))
+    if 'thunderbird' in selected:
+        from twigs.apps.thunderbird import settings
+        from twigs.apps.thunderbird.connection import BRIDGE
+        try:
+            config = settings.load() or {}
+        except (OSError, ValueError):
+            config = {}
+        node = config.get('node') or command('node')
+        add('thunderbird', 'bundled MCP bridge', BRIDGE.is_file(), 'Reinstall twigs; its Thunderbird bridge is missing.')
+        add('thunderbird', 'node', bool(node and (command(node) or os.path.isfile(node))), recipe(where, 'thunderbird'))
+        if node and probe:
+            try:
+                got = subprocess.run([node, '--version'], capture_output=True, text=True, timeout=5)
+                modern = got.returncode == 0 and int(got.stdout.strip().lstrip('v').split('.')[0]) >= 18
+            except (OSError, subprocess.SubprocessError, ValueError):
+                modern = False
+            add('thunderbird', 'Node.js 18+', modern, recipe(where, 'thunderbird'))
     return dict(schema_version=1, platform=where, python=sys.executable, checks=checks)
 
 
@@ -141,6 +161,9 @@ def main(argv=None):
             print(f'  {"ok" if c["ok"] else "missing":7} {c["feature"]:6} {c["name"]}')
             if c['hint']:
                 print('          ' + c['hint'].replace('\n', '\n          '))
+        if any(c['feature'] == 'thunderbird' for c in report['checks']):
+            print('Thunderbird needs its MCP extension enabled and a running profile. '
+                  'Headless startup is opt-in; see docs/thunderbird.md for setup and CPU troubleshooting.')
         print('Checks are local and read-only. Missing optional features do not prevent the other twigs from running.')
     required = {'base', *(selected or [])}
     return int(any(not c['ok'] for c in report['checks'] if c['feature'] in required))

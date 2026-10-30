@@ -9,7 +9,7 @@ package's, registered under the entry point group 'twigs.apps' (its value a modu
 Which are installed is kept in ~/.config/twigs/installed (`twigs install`)."""
 import importlib, importlib.util, json, os, shutil
 
-BUILT_IN = ('files', 'msg', 'cal', 'tasks')
+BUILT_IN = ('files', 'msg', 'cal', 'tasks', 'thunderbird')
 CONFIG = os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'), 'twigs')
 INSTALLED = os.path.join(CONFIG, 'installed')
 

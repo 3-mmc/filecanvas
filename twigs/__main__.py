@@ -1,7 +1,7 @@
 """twigs: small trees you move across, on one canvas.
 
     twigs                        every installed twig that adds to it, side by side
-    twigs APP [...]              one of them: files, msg, cal, tasks (`twigs APP help`)
+    twigs APP [...]              one of them: files, msg, cal, tasks, thunderbird (`twigs APP --help`)
     twigs doctor [FEATURE]       check dependencies; --platform macos|arch|ubuntu|debian, --json
     twigs --version              show the package version
     twigs apps                   which twigs there are, which are installed, and what each needs
