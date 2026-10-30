@@ -368,19 +368,24 @@ class Chat(fc.Provider):
             for m in msgs:
                 who = p.who(m.get('sender'))
                 day = when(m['time'] / 1000) if m.get('time', -1) > 0 else ''
-                if (who, day) != last:
-                    out += ['', f'{who} · {day}']
+                if (who, day) != last:          # a name, as a chip of the bar's, when it changes
+                    out += ([''] if out else []) + [self.name_chip(who, f' {day}')]
                     last = (who, day)
-                out += ['  ' + l for l in self.body(p, m).split('\n')]
+                out.append('\n'.join('  ' + l for l in self.body(p, m).split('\n')))
             typing = [p.who(u) for u in p.typing.get(chat, ())]
             if typing:
                 out += ['', ', '.join(typing) + ' typing…']
-            return '\n'.join(out).strip('\n')
+            return out
         if node.kind == 'chat-message':
             p, chat, m = node.data
             t = time.strftime('%Y-%m-%d %H:%M', time.localtime(m['time'] / 1000)) if m.get('time', -1) > 0 else ''
-            return [f'{p.who(m.get("sender"))} · {t}\n\n{self.body(p, m)}'] + self.picture(p, chat, m)
+            return [self.name_chip(p.who(m.get('sender')), f' {t}'), '', self.body(p, m)] + self.picture(p, chat, m)
         return None
+
+    def name_chip(self, who, after):
+        """Who wrote, coloured as the bar's chips are: you as its first, everyone else as the rest."""
+        colours = ('home_fg', 'home_bg') if who == 'You' else ('seg_fg', 'seg_bg')
+        return fc.Chips([(who, *colours, True)], after)
 
     def picture(self, p, chat, m):
         """A photo message's picture, for the pane; looking at one not fetched yet fetches it."""
