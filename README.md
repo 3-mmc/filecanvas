@@ -107,6 +107,19 @@ A provider can also keep the canvas open, the way a mail or chat client would:
   (every node's, with no path). What's open and chosen stays where the ids still are; a chosen
   node that's gone gives way to its neighbour.
 
+The canvas draws only when something's due, and then only the lines that changed. Still, it
+sleeps: no frames, no polling. It wakes for a key, a resize, or a provider's news (`invalidate`,
+`pulse` and `status` wake it at once, from any thread), and for what it knows will change on its
+own:
+
+- `beacon(node)` returns when what a node marks came (`time.time()`): it's drawn white on red,
+  blinking fast at first and slower as it ages (each half-blink a little longer, from 0.25 s to
+  3 s over an hour), then steadily lit. The canvas sleeps between flips. Calm
+  (`CDECK_CALM`) keeps it lit without blinking.
+- `next_change()` returns when what's drawn next changes by itself (a countdown ticking over, a
+  clock): the canvas draws again then.
+- `tint(node)` colours the start of a label in a provider's own colours (a date, a time).
+
 `python3 -m unittest test_treecanvas` runs the tests.
 
 ## In your shell

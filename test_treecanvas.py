@@ -1,7 +1,7 @@
 """Providers: a tree that isn't the file system, on the same canvas.
 
     python3 -m unittest test_treecanvas"""
-import os, re, tempfile, threading, unittest
+import os, re, select, tempfile, threading, unittest
 
 import treecanvas as fc
 
@@ -668,3 +668,155 @@ class FileSystemProvider(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class Waking(unittest.TestCase):
+    """Drawing when something's due, not all the time: beacons, due(), wake(), changed lines only."""
+    def test_a_beacon_blinks_slower_as_it_ages_then_stays_lit(self):
+        lit, wait = fc.blink(0)
+        self.assertTrue(lit)
+        self.assertAlmostEqual(wait, fc.BLINK_FAST, places=3)
+        lit, wait = fc.blink(0.3)                                       # past the first flip: dark
+        self.assertFalse(lit)
+        self.assertAlmostEqual(0.3 + wait, 0.5, places=2)
+        t, times = 0.0, [0.0]
+        while True:
+            lit, wait = fc.blink(t)
+            if wait is None:
+                break
+            t += wait + 1e-9
+            times.append(t)
+        halves = [b - a for a, b in zip(times, times[1:])][:-1]       # the last is cut short by BLINK_FOR
+        self.assertTrue(all(b >= a - 1e-6 for a, b in zip(halves, halves[1:])))     # each half-blink longer
+        self.assertAlmostEqual(halves[0], fc.BLINK_FAST, places=3)
+        self.assertAlmostEqual(halves[-1], fc.BLINK_SLOW, delta=0.1)
+        self.assertAlmostEqual(times[-1], fc.BLINK_FOR, delta=0.01)
+        flips = times
+        self.assertEqual(fc.blink(fc.BLINK_FOR + 5), (True, None))     # old: lit, never changing
+        self.assertLess(len(flips), 3300)                              # an hour of it: ~3,250 frames, not 60 fps's 216,000
+
+    def test_only_changed_lines_are_written(self):
+        self.assertEqual(fc.update(['a', 'b'], ['a', 'b']), '')
+        self.assertEqual(fc.update(['a', 'B'], ['a', 'b']), '\x1b[?2026h\x1b[2HB\x1b[K\x1b[?2026l')
+        self.assertIn('\x1b[3H\x1b[J', fc.update(['a', 'b'], ['a', 'b', 'c']))   # shorter: the rest cleared
+        self.assertEqual(fc.update(['a'], []).count('\x1b[K'), 1)
+
+    def test_due_is_none_when_still_and_says_when_otherwise(self):
+        class Clocked(fc.Tree):
+            at = None
+
+            def next_change(self):
+                return self.at
+        p = Clocked({'a': 1})
+        c = fc.Canvas('', options(provider=p))
+        c.frame(80, 20, animate=True)
+        self.assertIsNone(c.due())                                       # nothing will change: sleep
+        p.at = c.wall() + 30
+        self.assertAlmostEqual(c.due(), 30, delta=0.5)                   # a countdown ticking over
+        c.status('k', 'saved', 'ok')
+        self.assertAlmostEqual(c.due(), fc.SHOWN_OK, delta=0.5)          # a ✓ going
+        c.status('k', 'sending', 'busy')
+        self.assertEqual(c.due(), fc.SPIN_STEP)                          # a spinner turning
+        c.statuses.clear()
+        p.pulse('/a')
+        c.frame(80, 20, animate=True)
+        self.assertEqual(c.due(), fc.FRAME)                              # a flash: every frame till it's done
+        c.clock = lambda: 1e9
+        c.frame(80, 20, animate=True)
+        self.assertNotEqual(c.due(), fc.FRAME)
+
+    def test_beacons_are_lit_or_red_and_wake_the_canvas_for_their_flips(self):
+        class News(fc.Tree):
+            came = {}
+
+            def beacon(self, node):
+                return self.came.get(node.name)
+        p = News({'new': 1, 'old': 1, 'read': 1})
+        c = fc.Canvas('', options(provider=p, color='truecolor', theme='powerline'))
+        now = c.wall()
+        p.came = {'new': now - 0.3, 'old': now - 2 * fc.BLINK_FOR}
+        press(c, 'down', 'down')                                           # the choice on 'read'
+        lines, _ = c.frame(80, 20, animate=True)
+        row = lambda name: next(l for l in lines if name in ANSI.sub('', l))
+        alert = c.theme.get('alert_bg', c.theme['git_conflict'])
+        lit, dark = c.paint.code(alert, 1, 48) + 'm ', c.paint.code(alert, 1, 38) + ';'
+        self.assertIn(lit + 'old', row('old'))                             # old: lit, steadily
+        self.assertIn(dark, row('new'))                                    # new, dark half: red text
+        self.assertNotIn(lit + 'new', row('new'))
+        self.assertNotIn(c.paint.code(alert, 1, 38), row('read'))
+        self.assertAlmostEqual(c.due(), 0.5 - 0.3, delta=0.05)            # woken for new's next flip
+        lines, _ = c.frame(80, 20, animate=False)                         # calm: lit, and no flips to wait for
+        self.assertIn(lit + 'new', row('new'))
+        self.assertIsNone(c.due())
+
+    def test_invalidate_and_signal_wake_a_sleeping_canvas(self):
+        r, w = os.pipe()
+        os.set_blocking(r, False)
+        fc._WAKE = w
+        try:
+            p = fc.Tree({'a': 1})
+            threading.Thread(target=p.invalidate).start()
+            got = select.select([r], [], [], 2)[0]
+            self.assertEqual(got, [r])
+            os.read(r, 64)
+            p.pulse('/a')
+            self.assertEqual(select.select([r], [], [], 2)[0], [r])
+        finally:
+            fc._WAKE = None
+            os.close(r)
+            os.close(w)
+        fc.wake()                                                        # no canvas: nothing happens
+
+
+class Terminal(unittest.TestCase):
+    """The real loop in a pseudo-terminal: what a provider's thread changes is drawn at once, and a
+    still canvas writes nothing."""
+    SCRIPT = r'''
+import sys, threading, time
+sys.path.insert(0, {here!r})
+import treecanvas as fc
+class Later(fc.Tree):
+    def choose(self, node):
+        return None
+p = Later({{'first': 1}})
+def change():
+    time.sleep(0.6)
+    p.data = {{'first': 1, 'arrived': 1}}
+    p.invalidate()
+threading.Thread(target=change, daemon=True).start()
+fc.pick('', provider=p, backdrop='off', ease=1, glyphs='plain')
+'''
+
+    def test_a_change_is_drawn_at_once_and_stillness_writes_nothing(self):
+        import fcntl, pty, struct, subprocess, sys, termios, time
+        master, slave = pty.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))
+        here = os.path.dirname(os.path.abspath(fc.__file__))
+        proc = subprocess.Popen([sys.executable, '-c', self.SCRIPT.format(here=here)], stdin=slave, stdout=slave,
+                                stderr=subprocess.PIPE, start_new_session=True,
+                                preexec_fn=lambda: __import__('fcntl').ioctl(0, __import__('termios').TIOCSCTTY, 0))
+        os.close(slave)
+        seen, got_at, quiet_from, start = b'', None, None, time.time()
+        try:
+            while time.time() - start < 3:
+                ready = select.select([master], [], [], 0.05)[0]
+                if ready:
+                    chunk = os.read(master, 65536)
+                    seen += chunk
+                    if got_at is None and b'arrived' in seen:
+                        got_at, quiet_from = time.time(), None
+                    elif got_at is not None:
+                        quiet_from = None
+                elif got_at is not None and quiet_from is None:
+                    quiet_from = time.time()
+                if quiet_from and time.time() - quiet_from > 0.8:
+                    break
+            self.assertIsNotNone(got_at, proc.stderr.read1(4096) if proc.poll() is not None else 'never drawn')
+            self.assertLess(got_at - start, 2.0)
+            self.assertIsNotNone(quiet_from)                            # then nothing written while still
+            os.write(master, b'\x1b')
+            proc.wait(5)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+            os.close(master)
