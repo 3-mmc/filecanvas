@@ -55,7 +55,8 @@ def guide(config, ask=input, say=print, wait=600):
         xpi = host.fetch_extension()
         say(f'Downloaded and checked: {xpi}')
     if profile.extension != 'enabled':
-        now = host.state()[0]
+        now = host.state(profile=profile)[0]
+        host.require_known(now)
         if now != 'window':
             say('Opening Thunderbird…')
             if now == 'headless':
@@ -64,10 +65,13 @@ def guide(config, ask=input, say=print, wait=600):
                 host.start(profile, headless=False)
         if profile.extension is None:
             say(STEPS.format(path=host.shown_path(xpi)))
-    elif host.state()[0] == 'stopped':
-        if not yes(ask("Thunderbird isn't running. Start it in the background now? [Y/n] "), True):
-            raise OSError('Start Thunderbird, then run this again.')
-        host.start(profile)
+    else:
+        now = host.state(profile=profile)[0]
+        host.require_known(now)
+        if now == 'stopped':
+            if not yes(ask("Thunderbird isn't running. Start it in the background now? [Y/n] "), True):
+                raise OSError('Start Thunderbird, then run this again.')
+            host.start(profile)
     say('Waiting for Thunderbird to answer… (Ctrl+C stops)')
     began, nudged = time.monotonic(), False
     try:
@@ -112,7 +116,7 @@ def keep_running(ask=input, say=print):
         say('Then keep Thunderbird open (minimised is fine) while you use twigs, or: twigs thunderbird start')
         return
     say(f'Starts at login: {host.autostart(profile)}')
-    now = host.state()[0]
+    now = host.state(profile=profile)[0]
     if now == 'stopped':
         host.start(profile)
         say('Thunderbird is running in the background now.')
@@ -126,14 +130,15 @@ def status(say=print):
     if profile is None:
         say('Thunderbird: no profile found')
         return 1
-    now = host.state()[0]
+    now = host.state(profile=profile)[0]
     config = settings.load()
     say(f'Thunderbird profile: {profile.name} ({profile.kind})')
     say('Thunderbird MCP: ' + (profile.extension or 'not installed'))
-    say('Thunderbird: ' + dict(headless='running in the background', window='open in a window', stopped='not running')[now])
+    say('Thunderbird: ' + dict(headless='running in the background', window='open in a window', stopped='not running',
+                             unknown='running profile could not be identified')[now])
     say('Starts at login: ' + ('yes' if host.autostarts() else 'no'))
     say('Connected accounts: ' + (str(len(config['accounts'])) if config else 'none yet (twigs thunderbird connect)'))
-    return 0 if profile.extension == 'enabled' and now != 'stopped' and config else 1
+    return 0 if profile.extension == 'enabled' and now in ('headless', 'window') and config else 1
 
 
 def main(argv=None):

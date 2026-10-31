@@ -146,14 +146,23 @@ def diagnose(features=None, where=None, command=None, module=None, probe=True):
         profile = host.chosen()
         install = ('Install Thunderbird on Windows; twigs in WSL finds it there.' if host.where() == 'windows'
                    else recipe(where, 'thunderbird'))
-        add('thunderbird', 'Thunderbird profile', profile is not None and host.executable(profile),
+        try:
+            executable = profile is not None and host.executable(profile)
+        except OSError as e:
+            executable = False
+            install += '\n' + str(e)
+        add('thunderbird', 'Thunderbird profile', executable,
             install + '\nThen add your accounts in Thunderbird.')
         if profile is not None:
             add('thunderbird', f'Thunderbird MCP extension in {profile.name}', profile.extension == 'enabled',
                 'Enable it in Tools → Add-ons and Themes.' if profile.extension == 'disabled' else
                 'twigs thunderbird connect downloads it and walks you through installing it.')
             if probe:
-                add('thunderbird', 'Thunderbird running', host.state()[0] != 'stopped',
+                try:
+                    running = host.state(profile=profile)[0] in ('headless', 'window')
+                except OSError:
+                    running = False
+                add('thunderbird', 'Thunderbird running', running,
                     'twigs thunderbird start (in the background), or open Thunderbird; '
                     'twigs thunderbird autostart starts it at each login.')
         add('thunderbird', 'accounts connected to twigs', bool(config.get('accounts')), 'twigs thunderbird connect')

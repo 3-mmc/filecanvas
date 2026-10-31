@@ -153,7 +153,14 @@ twigs thunderbird autostart on      # start it in the background at each login (
 ```
 
 Twigs starts and stops Thunderbird only when you ask, and never changes its accounts or
-settings. Only one Thunderbird runs per profile: `start` does nothing if it's already open.
+settings. Start, stop, status, and the GUI round trip refer to the selected profile.
+Native launches use its exact directory; Flatpak and Snap resolve their own profile
+names. Separate profiles can run independently. `stop` only targets headless processes
+identified as belonging to the selected profile, and leaves other profiles alone.
+If a running process's profile cannot be identified, Twigs asks you to close Thunderbird
+yourself rather than guessing. A normal GUI launch without profile arguments can have
+this limitation, particularly on Windows. `gui` does nothing if the selected profile
+already has a window.
 
 | | profiles | starts | at login |
 | --- | --- | --- | --- |
@@ -161,9 +168,31 @@ settings. Only one Thunderbird runs per profile: `start` does nothing if it's al
 | macOS | `~/Library/Thunderbird` | `Thunderbird.app` | `~/Library/LaunchAgents/dev.twigs.thunderbird.plist` |
 | Windows (twigs in WSL) | `%APPDATA%\Thunderbird` | `thunderbird.exe` | `twigs-thunderbird.vbs` in the Startup folder |
 
+Login entries start the selected Thunderbird executable and profile directly; they do
+not depend on the Twigs development checkout or shell PATH at login. After moving the
+Thunderbird executable or profile, run `twigs thunderbird autostart on` again to refresh
+the entry. Linux entries use desktop-file quoting, including paths containing spaces;
+macOS entries use a LaunchAgent with separate argument strings.
+
 On Windows the login entry starts `thunderbird.exe` itself, hidden, so WSL needn't be
 running. `stop` ends the headless Thunderbird there with `taskkill /F`, since it has no window
 to close, and `gui` can't put it back in the background afterwards: run `start` again.
+
+Windows executable discovery checks `thunderbird.exe` on PATH, per-user and machine
+**App Paths** registry entries (including custom drives), then the system's Program Files
+and LocalAppData locations. For a portable or otherwise unregistered installation, set
+`TWIGS_THUNDERBIRD_EXE` to the full Windows or WSL path before running a command:
+
+```sh
+export TWIGS_THUNDERBIRD_EXE='D:\Portable Apps\Thunderbird\thunderbird.exe'
+twigs thunderbird start
+twigs thunderbird autostart on
+```
+
+Absolute Windows profile paths and executable paths are translated with `wslpath`, so
+Twigs uses WSL's configured mount locations instead of assuming `/mnt/c` for executables.
+The login entry retains the resolved executable and profile; the override need not exist
+in the Windows login environment. The bridge still needs Windows Node as described above.
 
 Login expiry or another prompt may require returning to the visible application. Running
 headlessly still runs the full Thunderbird engine.
@@ -184,3 +213,12 @@ The disposable fixture profile explicitly enabled content access for its decodin
 default privacy-withheld response was also checked. Real profile settings were not changed. A short idle sample showed 0% main-process
 CPU; this is not a long-term or cross-platform performance guarantee. Windows with your real
 accounts requires a separate live check after extension installation.
+
+
+## Other mail applications
+
+Thunderbird's host management and MCP transport remain local to this adapter. The
+canvas provider interface can also support other applications and transports, without
+requiring their lifecycle to resemble Thunderbird's. See [Adding another mail
+backend](mail-backends.md) for the existing extension points and compatibility checks.
+Apple Mail support is not implemented yet.
