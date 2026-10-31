@@ -85,4 +85,6 @@ python3 -m unittest                                              # from here: a 
 uv run --extra test pytest                                      # tasks included; mail checks skip if unavailable
 ```
 
+Other mail adapters can use the [provider extension points](docs/mail-backends.md).
+
 Optional [Thunderbird mail](docs/thunderbird.md) reuses your configured accounts: `twigs thunderbird connect` walks you through it, and can keep Thunderbird running in the background.
