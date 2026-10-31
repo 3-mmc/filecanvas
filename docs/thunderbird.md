@@ -14,29 +14,52 @@ and background behavior still apply.
 ## Setup
 
 1. Configure and sign in to your accounts in Thunderbird normally. Allow the initial sync to
-   finish and open the folders you intend to use so their local indexes are initialized.
-2. Install the upstream extension's `dist/thunderbird-mcp.xpi` through **Tools → Add-ons and
-   Themes → gear menu → Install Add-on From File**, then restart Thunderbird. In its Options,
-   check the server status and restrict account/tool access as desired. The add-on uses
-   Experiment APIs; if your Release build disables it, use a supported Thunderbird ESR build.
-3. Install Node.js 18 or newer. The upstream bridge is bundled with Twigs, with its MIT license;
-   the extension is installed separately. No additional Python packages are needed.
-4. Keep Thunderbird running and run:
+   finish. The first sync and search index of a large mailbox keep Thunderbird busy for a while.
+2. Install Node.js 18 or newer. The upstream bridge is bundled with Twigs, with its MIT license.
+   No additional Python packages are needed.
+3. Run, in a terminal:
 
 ```sh
-twigs doctor thunderbird
-twigs thunderbird accounts
 twigs thunderbird connect
-twigs thunderbird
 ```
 
-The connected accounts also appear under **Emails** alongside manually configured accounts, with a small “via Thunderbird”
-note in the status bar when selected.
+It walks you through the rest, one step at a time:
+
+- **The profile.** Twigs reads Thunderbird's `profiles.ini` and `installs.ini` and uses the
+  profile that has the extension, or else the one your Thunderbird opens by default.
+- **The extension.** If it's missing, Twigs asks before downloading Thunderbird MCP
+  0.10.0 (the version the bundled bridge is pinned to) from its GitHub release, and checks it
+  against a known SHA-256 before keeping it in `~/.cache/twigs`. It opens Thunderbird and tells
+  you where to install it: **Tools → Add-ons and Themes → gear menu → Install Add-on From
+  File**. Thunderbird asks you to allow it; Twigs can't and doesn't click that for you. In the
+  extension's Options, check the server status and which accounts it may read. The add-on uses
+  Experiment APIs; if your Release build disables it, use a supported Thunderbird ESR build.
+- **Waiting.** Twigs waits until the extension answers, so there's nothing to re-run.
+- **Accounts.** It lists them and connects all of them (except Local Folders and accounts
+  already set up in Twigs) unless you name the ones you want.
+- **Keeping Thunderbird running.** It offers to start Thunderbird in the background at each
+  login, as below.
+
+`twigs thunderbird status` and `twigs doctor thunderbird` show where each step stands. Run
+without a terminal, or with `--account`, `connect` doesn't ask anything, as before:
+
+```sh
+twigs thunderbird accounts
+twigs thunderbird connect --account account1 --account account3
+```
+
+The connected accounts appear under **Emails** alongside manually configured accounts, drawn
+as those are: folders in the same order (Inbox, Sent, Drafts, Archive, Starred, Junk, Trash,
+then your own, by Thunderbird's folder types, so localized names sort too), a folder's threads
+by date, by sender, or not grouped (**Ctrl+L**), unread ● and flagged ★, and a message's
+subject, people, date, body and attachments. A small “via Thunderbird” note shows in the
+status bar. Threads and groups are made from the messages loaded so far, 200 at a time.
 Use **Ctrl+F** within a folder to search; submit an empty query to clear it. Searches use the
 extension's header/preview matching, including `from:`, `subject:`, `to:` and `cc:` operators.
 Use **Ctrl+R** to request current data from Thunderbird. A “More messages” entry fetches the next
 page. Partial results and unconfirmed server refreshes are shown explicitly. Message bodies
-are requested only when opened. The adapter does not poll continuously or launch Thunderbird.
+are requested only when opened. The adapter does not poll continuously. If Thunderbird isn't
+running, or its extension is off, **Emails** says so and what to run, rather than showing an error.
 
 `twigs thunderbird sync` verifies the connection and reports selected-account folder counts.
 It does not independently synchronize every folder with the provider.
@@ -116,27 +139,40 @@ must be in the filesystem understood by the selected Node runtime; for Windows N
 Windows path. Do not paste the connection file's contents into configuration or bug reports.
 Closing Twigs closes only its bridge subprocess; it leaves Thunderbird running.
 
-## Optional headless operation and CPU troubleshooting
+## Keeping Thunderbird running
 
-First complete account setup and extension installation in the visible application. Quit
-Thunderbird before starting the same profile headlessly:
+Twigs reads mail only while Thunderbird runs. Keep it open (minimised is fine), or let it run
+in the background without a window:
 
 ```sh
-thunderbird --headless -P 'your-profile-name'
+twigs thunderbird start             # headless, on the profile with the extension
+twigs thunderbird gui               # its window (to sign in again, or answer a prompt);
+                                    #   back in the background when you close it
+twigs thunderbird stop              # stop the background one; a window is closed as usual
+twigs thunderbird autostart on      # start it in the background at each login (off: not)
 ```
 
-On Windows, use PowerShell, adjusting the install location:
+Twigs starts and stops Thunderbird only when you ask, and never changes its accounts or
+settings. Only one Thunderbird runs per profile: `start` does nothing if it's already open.
 
-```powershell
-& 'D:\Program Files\Thunderbird\thunderbird.exe' --headless -P 'your-profile-name'
-```
+| | profiles | starts | at login |
+| --- | --- | --- | --- |
+| Linux | `~/.config/thunderbird`, `~/.thunderbird`, Flatpak, Snap | `thunderbird`, `flatpak run`, `snap run` | `~/.config/autostart/twigs-thunderbird.desktop` |
+| macOS | `~/Library/Thunderbird` | `Thunderbird.app` | `~/Library/LaunchAgents/dev.twigs.thunderbird.plist` |
+| Windows (twigs in WSL) | `%APPDATA%\Thunderbird` | `thunderbird.exe` | `twigs-thunderbird.vbs` in the Startup folder |
 
-Stop the headless instance normally before reopening that profile visibly. Twigs does not
-start, stop or change settings in your Thunderbird profile. Login expiry or another prompt
-may require returning to the visible application. Running headlessly still runs the full
-Thunderbird engine.
+On Windows the login entry starts `thunderbird.exe` itself, hidden, so WSL needn't be
+running. `stop` ends the headless Thunderbird there with `taskkill /F`, since it has no window
+to close, and `gui` can't put it back in the background afterwards: run `start` again.
 
-[Mozilla bug 1958931](https://bugzilla.mozilla.org/show_bug.cgi?id=1958931) reports high CPU
+Login expiry or another prompt may require returning to the visible application. Running
+headlessly still runs the full Thunderbird engine.
+
+After the first start on a large mailbox, a core busy for many minutes is usually Thunderbird
+building its search index: `global-messages-db.sqlite` in the profile keeps growing. It settles
+once that's done, headless or not.
+
+[Mozilla bug 1958931](https://bugzilla.mozilla.org/show_bug.cgi?id=1958931) also reports high CPU
 usage from donation/new-release tabs in headless mode. If CPU remains high after startup and
 sync settle, return to visible Thunderbird, close those tabs and inspect other pending prompts
 before retrying. Use Task Manager on Windows, Activity Monitor on macOS, or `top` on Linux.

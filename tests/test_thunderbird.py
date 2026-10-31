@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 from twigs import core as fc
 from twigs.apps.thunderbird.connection import Client
-from twigs.apps.thunderbird.canvas import Thunderbird, folder_tree
+from twigs.apps.thunderbird.canvas import Thunderbird, folders, threads, groups
 from twigs.apps.thunderbird import settings
 
 ACCOUNTS = [dict(id='a1', name='Existing', identities=[dict(email='Reader@Example.test')]),
@@ -14,7 +14,7 @@ ACCOUNTS = [dict(id='a1', name='Existing', identities=[dict(email='Reader@Exampl
 FOLDER = dict(name='Inbox', path='mailbox://test/Inbox', depth=0, accountId='a2', unreadMessages=1)
 MESSAGE = dict(id='one@example.test', subject='Subject', author='Sender', date='2026-10-30T10:00:00Z',
                folderPath=FOLDER['path'], read=False)
-BODY = dict(MESSAGE, body='Hello\x1b[31m world', recipients='other@example.test', attachments=[dict(name='a.txt', size=12)])
+BODY = dict(MESSAGE, author='Sender <sender@example.test>', body='Hello\x1b[31m world', recipients='other@example.test', attachments=[dict(name='a.txt', size=12)])
 
 
 def fake_bridge(mode='normal'):
@@ -71,10 +71,28 @@ def test_configuration_preserves_explicit_account_choices_without_tokens(tmp_pat
     assert settings.path().stat().st_mode & 0o777==0o600
 
 
-def test_folder_depth_retains_nested_folders_without_parsing_their_uris():
-    rows=[FOLDER,dict(FOLDER,name='Child',depth=1,path='opaque:child'),dict(FOLDER,name='Sibling',depth=0,path='opaque:sibling')]
-    got=folder_tree(rows)
-    assert len(got)==2 and got[0]['children'][0]['path']=='opaque:child'
+def test_folders_are_listed_and_ordered_as_the_native_emails_by_type_not_language():
+    rows=[dict(FOLDER,name='[Gmail]',depth=0,type='folder',path='g'),
+          dict(FOLDER,name='Papierkorb',depth=1,type='trash',path='g/t'),
+          dict(FOLDER,name='Gesendet',depth=1,type='sent',path='g/s'),
+          dict(FOLDER,name='Entwürfe',depth=1,type='drafts',path='g/d'),
+          dict(FOLDER,name='Projekte',depth=0,type='folder',path='p'),
+          dict(FOLDER,name='Alt',depth=1,type='folder',path='p/a'),
+          dict(FOLDER,name='INBOX',depth=0,type='inbox',path='i')]
+    got=folders(rows)
+    assert [f['rel'] for f in got]==['INBOX','[Gmail]/Gesendet','[Gmail]/Entwürfe','[Gmail]/Papierkorb','Projekte','Projekte/Alt']
+
+
+def test_messages_become_threads_and_groups_by_date_or_sender():
+    now=1793404800          # 2026-10-31, a Saturday
+    day=lambda d:f'2026-10-{d:02d}T10:00:00Z'
+    ms=[dict(MESSAGE,id='a',threadId=1,date=day(31),author='Ann <ann@example.test>',read=True),
+        dict(MESSAGE,id='b',threadId=1,date=day(30),author='Bo <bo@example.test>',read=False),
+        dict(MESSAGE,id='c',threadId=2,date=day(3),author='Cy <cy@example.test>',read=True,flagged=True)]
+    ts=threads(ms)
+    assert [t['count'] for t in ts]==[2,1] and ts[0]['unread'] and ts[0]['author']=='Bo' and ts[1]['flagged']
+    assert [g for g,_ in groups(ts,'date',now)][0] in ('Today','Yesterday')
+    assert [g for g,_ in groups(ts,'sender',now)]==['Bo','Cy']
 
 
 class Fixture:
@@ -94,30 +112,63 @@ def loaded(p,n):
     n.load();p.wait();n.kids=None;return n.load()
 
 
-def test_canvas_pagination_body_and_runtime_overlap_filtering():
+def test_canvas_is_drawn_as_the_native_emails_with_pagination_and_overlap_filtering():
     with patch.object(settings,'existing_addresses',return_value={'reader@example.test'}):
-        p=Thunderbird(dict(accounts=['a1','a2']),client_factory=Fixture)
+        p=Thunderbird(dict(accounts=['a1','a2']),client_factory=Fixture,grouping='all')
         try:
             account=loaded(p,p.root())[0]
             assert account.data['id']=='a2'
             folder=loaded(p,account)[0]
+            assert folder.name=='Inbox' and p.count(folder)[1]=='git_dirty'
             first=loaded(p,folder)
-            message=first[0]
-            assert p.mark(message) is not None
+            thread=first[0]
+            assert thread.kind=='tb-thread' and thread.name=='Subject' and p.mark(thread)[1]=='●' and p.mark_before(thread)
             more=first[-1];assert more.kind=='tb-more'
             p.choose(more);p.wait();folder.kids=None
             page=folder.load()
-            assert len([n for n in page if n.kind=='tb-message'])==2
+            assert len([n for n in page if n.kind=='tb-thread'])==2
             assert any(n.name=='Narrow search' for n in page)
-            children=loaded(p,message)
+            children=loaded(p,thread)
+            assert [n.kind for n in children][:4]==['tb-subject','tb-person','tb-person','tb-when']
             body=next(n for n in children if n.kind=='tb-body')
             assert '\x1b' not in body.name
-            assert p.chip_rows(next(n for n in children if n.kind=='tb-sender'))==1
+            sender=next(n for n in children if n.kind=='tb-person')
+            assert p.count(sender)[0]=='from  sender@example.test'
+            assert next(n for n in children if n.kind=='tb-attachment').name=='📎 a.txt'
+            you=next(n for n in children if n.kind=='tb-person' and n.data['role']=='to')
+            assert p.chip(you)==('home_fg','home_bg')
             args=next(a for n,a in p.client.calls if n=='getMessage')
             assert args['bodyFormat']=='text' and args['saveAttachments'] is False
             assert p.reference(body)['priority']==0
         finally: p.close()
         assert p.client.closed
+
+
+def test_folder_threads_group_by_date_then_sender_with_ctrl_l():
+    p=Thunderbird(dict(accounts=['a2']),client_factory=Fixture)
+    folder=fc.Node('/thunderbird/f','Inbox',True,source=p,kind='tb-folder',data=dict(FOLDER,rel='INBOX'))
+    class Canvas:
+        def say(self,text):self.said=text
+    try:
+        group=loaded(p,folder)[0]
+        assert group.kind=='tb-group' and p.count(group)==('1','stub',False) and p.mark(group)[1]=='●'
+        assert group.load()[0].kind=='tb-thread'
+        c=Canvas();p.act(group,'group',c);folder.kids=None
+        assert c.said=='by sender' and folder.load()[0].name=='Sender'
+        assert ('\x0c','group','⌃L not grouped') in p.actions(folder)
+    finally:p.close()
+
+
+def test_every_chip_is_a_colour_each_theme_has():
+    p=Thunderbird(dict(accounts=['a2']),client_factory=Fixture)
+    try:
+        person=fc.Node('/x','Sender',False,source=p,kind='tb-person',data=dict(role='from',address='sender@example.test'))
+        for theme in fc.THEMES.values():
+            paint=fc.Paint(theme,True)
+            paint.on(*p.chip(person))
+            for _,fg,bg,_ in p.bar(person,False)[0]+p.bar(person,False)[1]:
+                paint.on(fg,bg)
+    finally:p.close()
 
 
 def test_new_query_cannot_be_overwritten_by_an_old_inflight_page():
@@ -158,7 +209,7 @@ def test_upstream_content_withheld_notice_is_displayed_without_overriding_privac
                 return dict(BODY, body='[Message content withheld: open it in Thunderbird.]',encryptedContentWithheld=True)
             return super().call(name,args)
     p=Thunderbird(dict(accounts=['a2']),client_factory=Withheld)
-    n=fc.Node('/fixture','Message',True,source=p,kind='tb-message',data=MESSAGE)
+    n=fc.Node('/fixture','Message',True,source=p,kind='tb-message',data=dict(MESSAGE,stamp=0))
     try:
         rows=loaded(p,n)
         assert any('Message content withheld' in r.name for r in rows)
@@ -170,7 +221,9 @@ def test_doctor_checks_runtime_without_reading_a_thunderbird_session(version,ok)
     import subprocess
     from twigs.kit import doctor
     with patch.object(settings,'load',return_value=dict(accounts=['a2'],node='/test/node.exe')), \
-         patch.object(doctor.subprocess,'run',return_value=subprocess.CompletedProcess([],0,version,'')):
+         patch.object(doctor.subprocess,'run',return_value=subprocess.CompletedProcess([],0,version,'')), \
+         patch('twigs.apps.thunderbird.host.chosen',return_value=None), \
+         patch('twigs.apps.thunderbird.host.where',return_value='linux'):
         report=doctor.diagnose(['thunderbird'],'ubuntu',command=lambda n:'/test/node.exe')
     assert next(c['ok'] for c in report['checks'] if c['name']=='Node.js 18+') is ok
 

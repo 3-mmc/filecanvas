@@ -15,19 +15,19 @@ RECIPES = {
         'mail': 'sudo apt install isync notmuch python3-notmuch2 msmtp pass gnupg',
         'oauth': 'sudo apt install neomutt libsasl2-modules-kdexoauth2',
         'media': 'sudo apt install chafa',
-        'thunderbird': 'Install Thunderbird with its MCP extension, and Node.js 18+. See docs/thunderbird.md.',
+        'thunderbird': 'sudo apt install thunderbird nodejs; then twigs thunderbird connect.',
     },
     'arch': {
         'mail': 'sudo pacman -S isync notmuch python-cffi msmtp pass gnupg',
         'oauth': 'sudo pacman -S neomutt; ensure your SASL plugins provide XOAUTH2 for mbsync',
         'media': 'sudo pacman -S chafa',
-        'thunderbird': 'sudo pacman -S thunderbird nodejs; install the Thunderbird MCP extension.',
+        'thunderbird': 'sudo pacman -S thunderbird nodejs; then twigs thunderbird connect.',
     },
     'macos': {
         'mail': 'brew install isync notmuch msmtp pass gnupg',
         'oauth': 'brew install neomutt; locate mutt_oauth2.py and set TWIGS_OAUTH_HELPER to its path',
         'media': 'brew install chafa',
-        'thunderbird': 'brew install --cask thunderbird; brew install node; install the Thunderbird MCP extension.',
+        'thunderbird': 'brew install --cask thunderbird; brew install node; then twigs thunderbird connect.',
     },
 }
 RECIPES['debian'] = RECIPES['ubuntu']
@@ -142,6 +142,21 @@ def diagnose(features=None, where=None, command=None, module=None, probe=True):
             except (OSError, subprocess.SubprocessError, ValueError):
                 modern = False
             add('thunderbird', 'Node.js 18+', modern, recipe(where, 'thunderbird'))
+        from twigs.apps.thunderbird import host
+        profile = host.chosen()
+        install = ('Install Thunderbird on Windows; twigs in WSL finds it there.' if host.where() == 'windows'
+                   else recipe(where, 'thunderbird'))
+        add('thunderbird', 'Thunderbird profile', profile is not None and host.executable(profile),
+            install + '\nThen add your accounts in Thunderbird.')
+        if profile is not None:
+            add('thunderbird', f'Thunderbird MCP extension in {profile.name}', profile.extension == 'enabled',
+                'Enable it in Tools → Add-ons and Themes.' if profile.extension == 'disabled' else
+                'twigs thunderbird connect downloads it and walks you through installing it.')
+            if probe:
+                add('thunderbird', 'Thunderbird running', host.state()[0] != 'stopped',
+                    'twigs thunderbird start (in the background), or open Thunderbird; '
+                    'twigs thunderbird autostart starts it at each login.')
+        add('thunderbird', 'accounts connected to twigs', bool(config.get('accounts')), 'twigs thunderbird connect')
     return dict(schema_version=1, platform=where, python=sys.executable, checks=checks)
 
 
@@ -162,8 +177,8 @@ def main(argv=None):
             if c['hint']:
                 print('          ' + c['hint'].replace('\n', '\n          '))
         if any(c['feature'] == 'thunderbird' for c in report['checks']):
-            print('Thunderbird needs its MCP extension enabled and a running profile. '
-                  'Headless startup is opt-in; see docs/thunderbird.md for setup and CPU troubleshooting.')
+            print('Thunderbird needs its MCP extension enabled and to be running. twigs thunderbird connect '
+                  'walks you through it; see docs/thunderbird.md for running it in the background.')
         print('Checks are local and read-only. Missing optional features do not prevent the other twigs from running.')
     required = {'base', *(selected or [])}
     return int(any(not c['ok'] for c in report['checks'] if c['feature'] in required))

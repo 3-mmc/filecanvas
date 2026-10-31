@@ -198,7 +198,7 @@ def send(path, account):
 
 def file_sent(msg, account):
     """A copy in the account's Sent folder (the first that looks like one), seen, for notmuch."""
-    from .mail import folder_rank
+    from .common import folder_rank
     folders = [os.path.relpath(top, account.maildir) for top, dirs, _ in os.walk(account.maildir)
                if 'cur' in dirs]
     sent = [f for f in folders if folder_rank(f)[0] == 1]
